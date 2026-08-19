@@ -229,7 +229,7 @@ function bootstrapOrigin(mirror, config) {
     frame.title = `cos-wpt bootstrap for ${origin}`;
     const timer = setTimeout(() => finish({
       origin, ok: false, error: 'no response (is the mirror deployed?)',
-    }), 20000);
+    }), 30000);
 
     function finish(result) {
       clearTimeout(timer);
@@ -814,7 +814,12 @@ async function main() {
   });
 
   for (const mirror of mirrors) {
-    const result = await bootstrapOrigin(mirror, originConfig(mirror.origin, allOrigins, manifest));
+    const config = originConfig(mirror.origin, allOrigins, manifest);
+    let result = await bootstrapOrigin(mirror, config);
+    // A mirror that has just been redeployed can still have a stale edge
+    // serving 404s, which looks exactly like a missing mirror. Give it one
+    // more try before writing it off.
+    if (!result.ok) result = await bootstrapOrigin(mirror, config);
     state.origins.push(result);
     push(result.ok ? 'ok' : 'warn', `Mirror ${mirror.origin}`,
          result.ok ? `scope ${result.scope}${result.rootScoped ? ' (origin root)' : ''}` : result.error);

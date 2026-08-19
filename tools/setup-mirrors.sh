@@ -125,7 +125,25 @@ EOF
   fi
   echo "  Pages set to build from the workflow"
 
+  # Enabling Pages on a repository that has just been pushed to also kicks off
+  # a legacy Jekyll build, which can land after the workflow's deployment and
+  # replace the site with a rendered README. Dispatch the real workflow last and
+  # wait for it, so it is unambiguously the deployment that wins.
+  sleep 5
   gh workflow run sync.yml --repo "$repo" >/dev/null 2>&1 || true
+  echo -n '  publishing'
+  for _ in $(seq 1 60); do
+    sleep 10
+    local status
+    status="$(gh run list --repo "$repo" --workflow sync.yml --limit 1 \
+      --json status,conclusion --jq '.[0].status + "/" + (.[0].conclusion // "-")' 2>/dev/null || echo '')"
+    echo -n '.'
+    case "$status" in
+      completed/success) echo ' done'; break ;;
+      completed/*) echo " run finished $status — see https://github.com/$repo/actions"; break ;;
+    esac
+  done
+
   rm -rf "$work"
 }
 

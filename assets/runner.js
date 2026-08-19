@@ -327,11 +327,10 @@ function unrunnableReason(test, env) {
     return 'needs HTTPS_REMOTE_ORIGIN and HTTPS_NOTSAMESITE_ORIGIN — configure ' +
            'two mirror origins in Settings';
   }
-  if (test.needsRootScope && !env.anyRootScoped) {
-    return 'hard-codes root-absolute paths such as ' +
-           '/common/dispatcher/remote-executor.html on its own origin, which ' +
-           'needs a host serving this site from an origin root; neither this ' +
-           `host (${BASE.pathname}) nor any configured mirror is one`;
+  if ((test.roles || []).length && !test.assignment) {
+    return `no origin assignment works for this test: it names ` +
+           `${test.roles.join(', ')}, and each of those has to be served from an ` +
+           'origin root so that /common/dispatcher/remote-executor.html resolves there';
   }
   return null;
 }
@@ -353,12 +352,17 @@ async function buildTests(manifest) {
     } catch (e) {
       unreadable.push(path);
     }
+    // Every origin a test names has to be able to answer a root-absolute path:
+    // cosOpenRemoteContext() navigates to /common/dispatcher/remote-executor.html
+    // on it, and transfer.html to /cross-origin-storage/resources/… on it. So
+    // each named role needs an origin whose worker is scoped at "/".
+    const roles = [];
+    if (/HTTPS_ORIGIN/.test(source)) roles.push('self');
+    if (/HTTPS_REMOTE_ORIGIN/.test(source)) roles.push('remote');
+    if (/HTTPS_NOTSAMESITE_ORIGIN/.test(source)) roles.push('notsamesite');
     const needs = {
-      needsRemoteOrigin: /HTTPS_REMOTE_ORIGIN|HTTPS_NOTSAMESITE_ORIGIN/.test(source),
-      // Two tests build URLs as origin + a root-absolute path, which only a
-      // root-scoped host can answer.
-      needsRootScope: /cosOpenRemoteContext\(\s*HTTPS_ORIGIN/.test(source) ||
-                      /['"]\/(cross-origin-storage|common)\/[^'"]*\.html['"]/.test(source),
+      roles,
+      needsRemoteOrigin: roles.includes('remote') || roles.includes('notsamesite'),
     };
 
     if (/\.any\.js$/.test(path)) {
@@ -402,26 +406,65 @@ function testHostOrigin() {
   return entry ? entry.origin : location.origin;
 }
 
+const ROLE_ORDER = ['self', 'remote', 'notsamesite'];
+
+function orderings(items) {
+  if (items.length <= 1) return [items];
+  const out = [];
+  items.forEach((item, i) => {
+    const rest = items.slice(0, i).concat(items.slice(i + 1));
+    for (const tail of orderings(rest)) out.push([item, ...tail]);
+  });
+  return out;
+}
+
 /**
- * Two tests build URLs as their own origin plus a root-absolute path, so they
- * are moved to an origin serving this site from its root whenever one exists,
- * even if the rest of the run is hosted here.
+ * Picks which origin plays which `get_host_info()` role for one test.
+ *
+ * No single global assignment serves every test: permissions-policy needs its
+ * own origin and HTTPS_REMOTE_ORIGIN root-scoped, transfer needs its own origin
+ * and HTTPS_NOTSAMESITE_ORIGIN. With two root-scoped mirrors and one project
+ * page all of them are satisfiable, but only by different assignments — so the
+ * roles are assigned per test, preferring to leave the test on the selected
+ * host where that works.
  */
-function hostForTest(test) {
-  const selected = testHostOrigin();
-  const entry = state.origins.find((o) => o.origin === selected);
-  if (test.needsRootScope && !(entry && entry.rootScoped)) {
-    const rooted = state.origins.find((o) => o.ok && o.rootScoped);
-    if (rooted) return rooted.origin;
+function assignOrigins(test) {
+  const usable = state.origins.filter((o) => o.ok);
+  if (!usable.length) return null;
+  const required = test.roles || [];
+  const preferred = testHostOrigin();
+
+  let best = null;
+  for (const ordering of orderings(usable)) {
+    const roles = {};
+    ROLE_ORDER.forEach((role, i) => { roles[role] = ordering[i]; });
+    if (!required.every((role) => roles[role] && roles[role].rootScoped)) continue;
+    const score = (roles.self.origin === preferred ? 2 : 0) + (roles.self.rootScoped ? 1 : 0);
+    if (!best || score > best.score) best = {score, roles};
+    if (best.score === 3) break;
   }
-  return selected;
+  if (!best) return null;
+  return {
+    self: best.roles.self,
+    remote: best.roles.remote ? best.roles.remote.origin : null,
+    notsamesite: best.roles.notsamesite ? best.roles.notsamesite.origin : null,
+  };
 }
 
 function testUrl(test) {
-  const origin = hostForTest(test);
-  const entry = state.origins.find((o) => o.origin === origin);
-  const base = (entry && entry.scope) || BASE.pathname;
-  return new URL(base + 'wpt/' + test.url, origin).href;
+  const assignment = test.assignment ||
+      {self: state.origins.find((o) => o.origin === testHostOrigin()), remote: null, notsamesite: null};
+  const host = assignment.self;
+  const base = (host && host.scope) || BASE.pathname;
+  const url = new URL(base + 'wpt/' + test.url, host ? host.origin : location.origin);
+  // The worker reads these back when it generates get-host-info.sub.js, so the
+  // roles can differ from test to test without reconfiguring an origin between
+  // one test and the next.
+  if ((test.roles || []).length) {
+    if (assignment.remote) url.searchParams.set('cos-remote', assignment.remote);
+    if (assignment.notsamesite) url.searchParams.set('cos-notsamesite', assignment.notsamesite);
+  }
+  return url.href;
 }
 
 function timeoutFor(test) {
@@ -840,11 +883,11 @@ async function main() {
   }
   fillSettingsForm();
 
-  const envFacts = {
-    hasMirrors,
-    anyRootScoped: state.origins.some((o) => o.ok && o.rootScoped),
-  };
-  for (const test of state.tests) test.reason = unrunnableReason(test, envFacts);
+  const envFacts = {hasMirrors};
+  for (const test of state.tests) {
+    test.assignment = (test.roles || []).length ? assignOrigins(test) : null;
+    test.reason = unrunnableReason(test, envFacts);
+  }
 
   render();
 

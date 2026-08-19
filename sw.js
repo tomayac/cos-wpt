@@ -115,7 +115,7 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   const wptPath = toWptPath(url.pathname);
   if (wptPath === null) return;
-  event.respondWith(serve(wptPath, url).catch((err) => new Response(
+  event.respondWith(serve(wptPath, url, event).catch((err) => new Response(
     `cos-wpt: ${err && err.message ? err.message : err}`,
     {status: 502, headers: {'Content-Type': 'text/plain; charset=utf-8'}})));
 });
@@ -161,7 +161,7 @@ function textResponse(body, path, extraHeaders) {
   return new Response(body, {headers});
 }
 
-async function serve(rawWptPath, url) {
+async function serve(rawWptPath, url, event) {
   const wptPath = REWRITES[rawWptPath] || rawWptPath;
   const config = (await readConfig()) || {};
   const pipeHeaders = parsePipe(url.searchParams.get('pipe'));
@@ -169,7 +169,7 @@ async function serve(rawWptPath, url) {
   const generated = await generateVariant(wptPath, config);
   if (generated !== null) return textResponse(generated, wptPath, pipeHeaders);
 
-  const shim = await serveShim(wptPath, config);
+  const shim = await serveShim(wptPath, config, event);
   if (shim !== null) return textResponse(shim, wptPath, pipeHeaders);
 
   if (wptPath === 'common/dispatcher/dispatcher.py') {
@@ -349,8 +349,10 @@ done();
  * Infrastructure this worker replaces rather than proxies, because the
  * upstream version depends on wptserve behaviour a static host cannot offer.
  */
-async function serveShim(wptPath, config) {
-  if (wptPath === 'common/get-host-info.sub.js') return hostInfo(config);
+async function serveShim(wptPath, config, event) {
+  if (wptPath === 'common/get-host-info.sub.js') {
+    return hostInfo(config, await roleOverrides(event));
+  }
   if (wptPath === 'resources/testharnessreport.js') return localFile('shims/testharnessreport.js');
   if (wptPath === 'common/dispatcher/dispatcher.js') return localFile('shims/dispatcher.js');
   if (wptPath === 'common/dispatcher/remote-executor.html') return localFile('shims/remote-executor.html');
@@ -368,12 +370,40 @@ async function localFile(rel) {
  * template in from its own multi-host configuration; here the extra origins
  * are whatever the runner was configured with.
  */
-function hostInfo(config) {
+/**
+ * The runner assigns these two roles per test rather than per origin, because
+ * different tests need different origins to be root-scoped. It passes its
+ * choice on the test page's own URL, which is where these come from.
+ */
+async function roleOverrides(event) {
+  let source = '';
+  try {
+    if (event && event.clientId) {
+      const client = await self.clients.get(event.clientId);
+      if (client && client.url) source = client.url;
+    }
+  } catch (err) {
+    // No client (a navigation, or a worker); fall back to the referrer.
+  }
+  if (!source && event && event.request) source = event.request.referrer || '';
+  if (!source) return null;
+  try {
+    const params = new URL(source).searchParams;
+    const remote = params.get('cos-remote');
+    const notsamesite = params.get('cos-notsamesite');
+    if (!remote && !notsamesite) return null;
+    return {remote, notsamesite};
+  } catch (err) {
+    return null;
+  }
+}
+
+function hostInfo(config, overrides) {
   const origins = config.origins || {};
   const self_ = self.location.origin;
   const UNSET = 'https://cos-wpt-origin-not-configured.invalid';
-  const remote = origins.remote || UNSET;
-  const notsamesite = origins.notsamesite || UNSET;
+  const remote = (overrides && overrides.remote) || origins.remote || UNSET;
+  const notsamesite = (overrides && overrides.notsamesite) || origins.notsamesite || UNSET;
   const host = (o) => { try { return new URL(o).host; } catch { return o; } };
   const info = {
     HTTP_PORT: '80', HTTP_PORT2: '80', HTTPS_PORT: '443', HTTPS_PORT2: '443',

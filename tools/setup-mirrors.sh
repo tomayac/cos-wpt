@@ -5,9 +5,12 @@
 #
 # GitHub has no API for creating an organisation, so create the two orgs first
 # at https://github.com/organizations/new (the free plan is enough). Everything
-# after that is automated here: the <org>.github.io repositories, a write
-# deploy key per mirror so the sync workflow needs no personal access token,
-# the initial push, and Pages itself.
+# after that is automated here.
+#
+# The mirrors pull rather than being pushed to: each holds nothing but a
+# workflow that checks this (public) repository out and publishes it to Pages.
+# That needs no deploy key and no personal access token, and leaves nothing to
+# drift out of sync.
 #
 # Usage: tools/setup-mirrors.sh [remote-org] [alt-org]
 
@@ -16,7 +19,6 @@ set -euo pipefail
 REMOTE_ORG="${1:-cos-wpt-remote}"
 ALT_ORG="${2:-cos-wpt-alt}"
 SOURCE_REPO="${SOURCE_REPO:-tomayac/cos-wpt}"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
@@ -25,7 +27,7 @@ command -v gh >/dev/null || die 'gh is not installed'
 gh auth status >/dev/null 2>&1 || die 'gh is not authenticated'
 
 setup_mirror() {
-  local org="$1" secret="$2" repo="$1/$1.github.io"
+  local org="$1" repo="$1/$1.github.io"
 
   say "Mirror $org"
 
@@ -42,54 +44,93 @@ setup_mirror() {
     echo "  created $repo"
   fi
 
-  # A write deploy key is scoped to this one repository, so the sync workflow
-  # never needs a personal access token.
-  local keydir key
-  keydir="$(mktemp -d)"
-  key="$keydir/id_ed25519"
-  ssh-keygen -t ed25519 -N '' -C "cos-wpt-mirror-$org" -f "$key" >/dev/null
-
-  for id in $(gh api "repos/$repo/keys" --jq ".[] | select(.title == \"cos-wpt sync\") | .id"); do
-    gh api -X DELETE "repos/$repo/keys/$id" >/dev/null
-  done
-  gh api -X POST "repos/$repo/keys" \
-    -f title='cos-wpt sync' -f "key=$(cat "$key.pub")" -F read_only=false >/dev/null
-  gh secret set "$secret" --repo "$SOURCE_REPO" < "$key" >/dev/null
-  echo "  deploy key installed, private half stored as $secret on $SOURCE_REPO"
-
-  # The mirror is the site without its workflows: it is a plain static copy,
-  # and running this repository's deploy/mirror workflows there would only
-  # confuse things.
   local work
   work="$(mktemp -d)"
-  git -C "$ROOT" archive HEAD | tar -x -C "$work"
-  rm -rf "$work/.github" "$work/tools"
+  mkdir -p "$work/.github/workflows"
+
+  cat > "$work/.github/workflows/sync.yml" <<EOF
+# This repository exists only to give $SOURCE_REPO a second origin, which its
+# cross-origin tests need. It holds no copy of the site: every run publishes
+# the source repository as it stands.
+name: Publish the cos-wpt site
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: \${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: $SOURCE_REPO
+      - name: Drop the source repository's own workflows and tooling
+        run: rm -rf .github tools
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
+EOF
+
+  cat > "$work/README.md" <<EOF
+# $org.github.io
+
+A cross-origin mirror of [$SOURCE_REPO](https://github.com/$SOURCE_REPO), which
+runs the Cross-Origin Storage web platform tests.
+
+Those tests need origins other than the one serving the runner —
+\`HTTPS_REMOTE_ORIGIN\` and \`HTTPS_NOTSAMESITE_ORIGIN\` — and a GitHub account
+gets one origin. Hence this organisation, whose only purpose is to be a
+different one. Serving from an organisation site rather than a project page
+matters too: only a service worker scoped at \`/\` can answer the root-absolute
+paths a couple of the tests hard-code.
+
+This repository holds no copy of the site. [\`sync.yml\`](.github/workflows/sync.yml)
+publishes the source repository directly, hourly and on demand.
+EOF
+
   (
     cd "$work"
     git init -q -b main
-    git config user.name 'cos-wpt mirror'
+    git config user.name 'cos-wpt'
     git config user.email 'cos-wpt@users.noreply.github.com'
     git add -A
-    git commit -q -m "Mirror of $SOURCE_REPO"
-    GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-      git push -q --force "git@github.com:$repo.git" main
+    git commit -q -m "Publish the cos-wpt site from $SOURCE_REPO"
+    git push -q --force "https://github.com/$repo.git" main
   )
-  echo "  pushed the site"
+  echo "  pushed the publishing workflow"
 
   if gh api "repos/$repo/pages" >/dev/null 2>&1; then
-    gh api -X PUT "repos/$repo/pages" -f build_type=legacy \
-      -f 'source[branch]=main' -f 'source[path]=/' >/dev/null
+    gh api -X PUT "repos/$repo/pages" -f build_type=workflow >/dev/null
   else
-    gh api -X POST "repos/$repo/pages" \
-      -f 'source[branch]=main' -f 'source[path]=/' >/dev/null
+    gh api -X POST "repos/$repo/pages" -f build_type=workflow >/dev/null
   fi
-  echo "  Pages enabled at https://$org.github.io/"
+  echo "  Pages set to build from the workflow"
 
-  rm -rf "$keydir" "$work"
+  gh workflow run sync.yml --repo "$repo" >/dev/null 2>&1 || true
+  rm -rf "$work"
 }
 
-setup_mirror "$REMOTE_ORG" MIRROR_KEY_REMOTE
-setup_mirror "$ALT_ORG" MIRROR_KEY_ALT
+setup_mirror "$REMOTE_ORG"
+setup_mirror "$ALT_ORG"
 
 say 'Waiting for both mirrors to answer'
 for org in "$REMOTE_ORG" "$ALT_ORG"; do
@@ -99,7 +140,9 @@ for org in "$REMOTE_ORG" "$ALT_ORG"; do
       echo "  https://$org.github.io/sw.js -> 200"
       break
     fi
-    [ "$attempt" = 40 ] && echo "  https://$org.github.io/sw.js -> $code (still building; Pages can take a few minutes)"
+    if [ "$attempt" = 40 ]; then
+      echo "  https://$org.github.io/sw.js -> $code (check the run at https://github.com/$org/$org.github.io/actions)"
+    fi
     sleep 15
   done
 done

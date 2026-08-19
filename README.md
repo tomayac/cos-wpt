@@ -75,23 +75,23 @@ depend on wptserve behaviour a static host cannot provide. They live in
 Cross-origin tests need two more origins serving this same site. GitHub Pages
 gives an account one origin, so the mirrors are separate `github.io` sites:
 
-| Role | Default |
+| Role | Origin |
 | --- | --- |
-| `HTTPS_REMOTE_ORIGIN` | `https://cos-wpt-remote.github.io` |
-| `HTTPS_NOTSAMESITE_ORIGIN` | `https://cos-wpt-alt.github.io` |
+| `HTTPS_REMOTE_ORIGIN` | [`cos-wpt-remote.github.io`](https://github.com/cos-wpt-remote/cos-wpt-remote.github.io) |
+| `HTTPS_NOTSAMESITE_ORIGIN` | [`cos-wpt-alt.github.io`](https://github.com/cos-wpt-alt/cos-wpt-alt.github.io) |
 
-To set them up:
+Both are already set up. To reproduce them from scratch:
 
-1. Create two free GitHub organisations, `cos-wpt-remote` and `cos-wpt-alt`, at
-   <https://github.com/organizations/new>. This is the only manual step —
-   GitHub has no API for creating an organisation.
-2. Run [`tools/setup-mirrors.sh`](tools/setup-mirrors.sh). It creates
-   `<org>/<org>.github.io` in each (which GitHub serves at the origin **root**),
-   installs a write deploy key per mirror so no personal access token is needed,
-   pushes the site, enables Pages, and waits for both to answer.
+1. Create two free GitHub organisations at <https://github.com/organizations/new>.
+   This is the only manual step — GitHub has no API for creating an organisation.
+2. Run [`tools/setup-mirrors.sh`](tools/setup-mirrors.sh), which creates
+   `<org>/<org>.github.io` in each (GitHub serves those at the origin **root**),
+   configures Pages, and waits for both to answer.
 
-[`mirror.yml`](.github/workflows/mirror.yml) then keeps them in step on every
-push to `main`, and skips any mirror whose deploy key is missing.
+The mirrors pull rather than being pushed to: each holds nothing but a workflow
+that checks this public repository out and publishes it, hourly and on demand.
+So there is no deploy key, no personal access token, and no second copy of the
+site to drift out of date.
 
 Any host works — a mirror is just a copy of this repository — and the origins
 are editable in the runner's Settings panel, so `?remote=…&notsamesite=…` is

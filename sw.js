@@ -81,7 +81,37 @@ async function writeConfig(config) {
 
 self.addEventListener('message', (event) => {
   const data = event.data;
-  if (!data || data.type !== 'cos-wpt:config') return;
+  if (!data) return;
+
+  // Reading a file straight from the worker, rather than fetching it through
+  // the virtual tree, means the runner does not have to be a controlled client
+  // to build its test list — which a hard reload, or DevTools' network bypass,
+  // would otherwise prevent.
+  // Lets the runner find out whether this worker is new enough to answer
+  // reads, instead of discovering it one timeout at a time.
+  if (data.type === 'cos-wpt:ping') {
+    const port = (event.ports || [])[0];
+    if (port) port.postMessage({ok: true});
+    return;
+  }
+
+  if (data.type === 'cos-wpt:read') {
+    event.waitUntil((async () => {
+      const port = (event.ports || [])[0];
+      if (!port) return;
+      try {
+        const target = new URL(MOUNT + data.path, SCOPE.origin);
+        const response = await serve(data.path, target, null);
+        const text = await response.text();
+        port.postMessage(response.ok ? {ok: true, text} : {ok: false, status: response.status});
+      } catch (err) {
+        port.postMessage({ok: false, error: String((err && err.message) || err)});
+      }
+    })());
+    return;
+  }
+
+  if (data.type !== 'cos-wpt:config') return;
   event.waitUntil((async () => {
     await writeConfig(data.config);
     for (const port of event.ports || []) port.postMessage({ok: true});

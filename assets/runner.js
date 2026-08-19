@@ -20,6 +20,7 @@ const DEFAULTS = {
 };
 
 const SETTINGS_KEY = 'cos-wpt:settings';
+const CONTROL_RETRY_KEY = 'cos-wpt:reloaded-for-control';
 const BASE = new URL('./', location.href);
 const MOUNT = new URL('wpt/', BASE);
 
@@ -30,6 +31,7 @@ const state = {
   origins: [],          // [{origin, scope, rootScoped, ok, error}]
   running: false,
   abort: false,
+  worker: null,
 };
 
 /* ---------------------------------------------------------------- settings */
@@ -164,27 +166,31 @@ async function registerWorker() {
   const registration = await navigator.serviceWorker.register(
       new URL('sw.js', BASE), {scope: './'});
   await navigator.serviceWorker.ready;
-  // `fetch()` from this page is only intercepted once the worker controls it,
-  // and the runner reads the test sources through it. A hard reload loads the
-  // page outside the worker's control on purpose, so recover with one ordinary
-  // reload rather than quietly building the test list from 404s.
+
+  // Being controlled is nice — it makes the virtual tree fetchable from here —
+  // but it is not required: the test sources are read from the worker over a
+  // message port, and a test frame is a navigation, which the active
+  // registration handles whether or not this page is controlled. So wait
+  // briefly, try one ordinary reload, and then carry on either way.
   if (!navigator.serviceWorker.controller) {
     await Promise.race([
       new Promise((resolve) =>
           navigator.serviceWorker.addEventListener('controllerchange', resolve, {once: true})),
-      new Promise((resolve) => setTimeout(resolve, 3000)),
+      new Promise((resolve) => setTimeout(resolve, 5000)),
     ]);
   }
-  if (!navigator.serviceWorker.controller) {
-    if (!sessionStorage.getItem('cos-wpt:reloaded-for-control')) {
-      sessionStorage.setItem('cos-wpt:reloaded-for-control', '1');
-      location.reload();
-      await new Promise(() => {});
-    }
-    throw new Error('this page is not controlled by its service worker, so the ' +
-                    'test tree cannot be served (a hard reload does this; reload normally)');
+  if (!navigator.serviceWorker.controller &&
+      !sessionStorage.getItem(CONTROL_RETRY_KEY)) {
+    sessionStorage.setItem(CONTROL_RETRY_KEY, '1');
+    location.reload();
+    await new Promise(() => {});
   }
-  sessionStorage.removeItem('cos-wpt:reloaded-for-control');
+  // Always clear it, so a later reload is free to try again rather than
+  // inheriting a stale "already retried" mark.
+  sessionStorage.removeItem(CONTROL_RETRY_KEY);
+  const worker = navigator.serviceWorker.controller || registration.active ||
+                 registration.waiting || registration.installing;
+  state.worker = (await workerAnswers(worker)) ? worker : null;
   return registration;
 }
 
@@ -270,8 +276,45 @@ function frameHost() {
 
 /* ------------------------------------------------------------- test list */
 
-/** Reads a file out of the virtual tree the service worker serves. */
+/**
+ * An already-installed worker from an older deploy will not answer reads. Find
+ * that out once, rather than once per file.
+ */
+function workerAnswers(worker) {
+  if (!worker) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(false), 4000);
+    channel.port1.onmessage = () => { clearTimeout(timer); resolve(true); };
+    try {
+      worker.postMessage({type: 'cos-wpt:ping'}, [channel.port2]);
+    } catch (err) {
+      clearTimeout(timer);
+      resolve(false);
+    }
+  });
+}
+
+/**
+ * Reads a file out of the virtual tree. This asks the worker directly rather
+ * than fetching, so it works even when this page is not a controlled client.
+ */
 async function readTestFile(path) {
+  if (state.worker) {
+    const result = await new Promise((resolve) => {
+      const channel = new MessageChannel();
+      const timer = setTimeout(() => resolve(null), 20000);
+      channel.port1.onmessage = (event) => { clearTimeout(timer); resolve(event.data); };
+      try {
+        state.worker.postMessage({type: 'cos-wpt:read', path}, [channel.port2]);
+      } catch (err) {
+        clearTimeout(timer);
+        resolve(null);
+      }
+    });
+    if (result && result.ok) return result.text;
+    if (result) throw new Error(`could not read ${path} (${result.status || result.error})`);
+  }
   const res = await fetch(new URL(path, MOUNT).href);
   if (!res.ok) throw new Error(`could not read ${path} (${res.status})`);
   return res.text();
@@ -824,6 +867,12 @@ async function main() {
   let registration;
   try {
     registration = await registerWorker();
+    if (!navigator.serviceWorker.controller) {
+      push('warn', 'Worker control',
+           'this page is not a controlled client — a hard reload, or DevTools\' ' +
+           '"Bypass for network", does that. Test sources are read from the worker ' +
+           'directly instead, and the tests themselves are unaffected.');
+    }
     const scope = new URL(registration.scope).pathname;
     push('ok', `Service worker at ${scope}`,
          scope === '/' ? 'an origin root, so every role a test names can be played by this origin'

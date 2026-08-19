@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<meta charset="utf-8">
+<title>cos-wpt remote executor</title>
+<body>
+<!--
+  Stands in for WPT's /common/dispatcher/remote-executor.html. Identical to
+  upstream except that dispatcher.js is loaded without an integrity hash,
+  because cos-wpt serves a postMessage-based replacement for it.
+-->
+<script src="/common/utils.js"></script>
+<script src="/common/dispatcher/dispatcher.js"></script>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const uuid = params.get('uuid');
+  const executor = new Executor(uuid);  // `execute()` is called in constructor.
+</script>
+</body>
+</html>

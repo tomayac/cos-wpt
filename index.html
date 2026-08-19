@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cos-wpt — Cross-Origin Storage web platform tests</title>
+<meta name="description" content="Runs the Cross-Origin Storage web platform tests straight from their pull request, on a static host.">
+<link rel="icon" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/runner.css">
+<body>
+<header class="masthead">
+  <div>
+    <h1>cos-wpt</h1>
+    <p class="tagline">
+      The <a href="https://wicg.github.io/cross-origin-storage/">Cross-Origin Storage</a>
+      web platform tests, served live from
+      <a id="pr-link" href="https://github.com/web-platform-tests/wpt/pull/61811">their pull request</a>.
+    </p>
+  </div>
+  <div class="masthead-actions">
+    <button id="run-all" type="button" class="primary">Run all</button>
+    <button id="stop" type="button" disabled>Stop</button>
+    <button id="refresh" type="button" title="Re-read the pull request from GitHub">Refresh</button>
+  </div>
+</header>
+
+<section id="environment" class="panel">
+  <h2>Environment</h2>
+  <ul id="env-list" class="checks"><li class="pending">Starting up…</li></ul>
+</section>
+
+<section class="panel">
+  <div class="toolbar">
+    <label class="field grow">
+      <span>Filter</span>
+      <input id="filter" type="search" placeholder="e.g. origins, declarative, worker" autocomplete="off">
+    </label>
+    <label class="field checkbox">
+      <input id="hide-skipped" type="checkbox">
+      <span>Hide unrunnable</span>
+    </label>
+    <span class="spacer"></span>
+    <button id="export-json" type="button">Export JSON</button>
+    <button id="copy-summary" type="button">Copy summary</button>
+    <button id="settings-toggle" type="button">Settings</button>
+  </div>
+
+  <form id="settings" class="settings" hidden>
+    <div class="settings-grid">
+      <label class="field">
+        <span>Pull request</span>
+        <input id="pr-number" type="number" min="1" inputmode="numeric">
+      </label>
+      <label class="field">
+        <span>Upstream repository</span>
+        <input id="pr-repo" type="text" spellcheck="false">
+      </label>
+      <label class="field">
+        <span>Infrastructure ref (web-platform-tests/wpt)</span>
+        <input id="upstream-ref" type="text" spellcheck="false">
+      </label>
+      <label class="field">
+        <span>Remote origin (<code>HTTPS_REMOTE_ORIGIN</code>)</span>
+        <input id="origin-remote" type="url" spellcheck="false" placeholder="https://…">
+      </label>
+      <label class="field">
+        <span>Not-same-site origin (<code>HTTPS_NOTSAMESITE_ORIGIN</code>)</span>
+        <input id="origin-notsamesite" type="url" spellcheck="false" placeholder="https://…">
+      </label>
+      <label class="field">
+        <span>Per-test timeout (seconds)</span>
+        <input id="timeout" type="number" min="5" max="600">
+      </label>
+      <label class="field">
+        <span>Host tests on</span>
+        <select id="test-host"></select>
+      </label>
+    </div>
+    <p class="settings-help">
+      Cross-origin tests need two more origins serving this same site. Anything
+      that mirrors this repository works; see the
+      <a href="https://github.com/tomayac/cos-wpt#mirror-origins">README</a>.
+      Serving a mirror from an origin root additionally lets it answer the
+      root-absolute paths two of the tests hard-code.
+    </p>
+    <div class="settings-actions">
+      <button type="submit" class="primary">Save and reload</button>
+      <button type="button" id="settings-reset">Reset to defaults</button>
+    </div>
+  </form>
+
+  <div id="summary" class="summary" hidden></div>
+  <div id="tests" class="tests"><p class="pending">Loading the test list…</p></div>
+</section>
+
+<footer class="colophon">
+  <p>
+    Tests and infrastructure are fetched at runtime — nothing in this
+    repository is a copy of them. Source:
+    <a href="https://github.com/tomayac/cos-wpt">tomayac/cos-wpt</a>.
+  </p>
+</footer>
+
+<script type="module" src="assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+# Copies this site to the mirror origins that serve HTTPS_REMOTE_ORIGIN and
+# HTTPS_NOTSAMESITE_ORIGIN. Skipped unless MIRROR_TOKEN is configured; see the
+# "Mirror origins" section of the README.
+name: Push to mirror origins
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - cos-wpt-remote/cos-wpt-remote.github.io
+          - cos-wpt-alt/cos-wpt-alt.github.io
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for a token
+        id: token
+        env:
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: echo "present=${MIRROR_TOKEN:+yes}" >> "$GITHUB_OUTPUT"
+
+      - name: Push
+        if: steps.token.outputs.present == 'yes'
+        env:
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf .git
+          git init -q -b main
+          git config user.name "cos-wpt mirror"
+          git config user.email "cos-wpt@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Mirror of ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+          git push -q --force \
+            "https://x-access-token:${MIRROR_TOKEN}@github.com/${{ matrix.target }}.git" main

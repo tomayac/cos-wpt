@@ -640,6 +640,14 @@ function render() {
 
     const body = document.createElement('div');
     body.className = 'test-body';
+    if (!test.reason && test.assignment && test.assignment.self.origin !== location.origin) {
+      const note = document.createElement('p');
+      note.className = 'note';
+      note.textContent =
+          `Hosted on ${test.assignment.self.origin}, which serves this site from ` +
+          'its origin root — this test addresses its own origin with a root-absolute path.';
+      body.append(note);
+    }
     if (test.reason) {
       const p = document.createElement('p');
       p.className = 'reason';
@@ -796,8 +804,14 @@ function wireUi() {
 async function main() {
   wireUi();
   const env = [];
-  const push = (level, label, detail) => {
-    env.push({level, label, detail});
+  const push = (level, label, detail, id) => {
+    env.push({level, label, detail, id});
+    renderEnvironment(env);
+  };
+  const revise = (id, level, label, detail) => {
+    const entry = env.find((e) => e.id === id);
+    if (!entry) return;
+    Object.assign(entry, {level, label, detail});
     renderEnvironment(env);
   };
 
@@ -811,9 +825,10 @@ async function main() {
   try {
     registration = await registerWorker();
     const scope = new URL(registration.scope).pathname;
-    push(scope === '/' ? 'ok' : 'warn', `Service worker at ${scope}`,
-         scope === '/' ? 'origin root: root-absolute test paths work'
-                       : 'not the origin root, so two tests that hard-code root-absolute paths cannot run here');
+    push('ok', `Service worker at ${scope}`,
+         scope === '/' ? 'an origin root, so every role a test names can be played by this origin'
+                       : 'not an origin root — checking whether the mirrors cover the roles that need one',
+         'scope');
   } catch (error) {
     push('bad', 'Service worker', error.message);
     return;
@@ -887,6 +902,26 @@ async function main() {
   for (const test of state.tests) {
     test.assignment = (test.roles || []).length ? assignOrigins(test) : null;
     test.reason = unrunnableReason(test, envFacts);
+  }
+
+  const scope = new URL(registration.scope).pathname;
+  if (scope !== '/') {
+    const elsewhere = state.tests.filter(
+        (t) => !t.reason && t.assignment && t.assignment.self.origin !== location.origin);
+    const stranded = state.tests.filter(
+        (t) => t.reason && (t.roles || []).length && !t.assignment);
+    if (stranded.length) {
+      revise('scope', 'warn', `Service worker at ${scope}`,
+             `not an origin root, and no mirror covers ${stranded.length} test(s) that need one`);
+    } else if (elsewhere.length) {
+      const hosts = [...new Set(elsewhere.map((t) => t.assignment.self.origin))];
+      revise('scope', 'ok', `Service worker at ${scope}`,
+             `not an origin root, so ${elsewhere.length} test(s) that address their own ` +
+             `origin with a root-absolute path run on ${hosts.join(' and ')} instead`);
+    } else {
+      revise('scope', 'ok', `Service worker at ${scope}`,
+             'not an origin root, and no test needs one');
+    }
   }
 
   render();

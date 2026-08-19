@@ -97,13 +97,22 @@ Any host works — a mirror is just a copy of this repository — and the origin
 are editable in the runner's Settings panel, so `?remote=…&notsamesite=…` is
 enough to try another pair without redeploying.
 
-**Serving a mirror from the origin root matters.** `transfer` and
-`permissions-policy` build URLs as *origin + a root-absolute path*
-(`/cross-origin-storage/resources/transfer-receiver.html`,
-`/common/dispatcher/remote-executor.html`). Only a worker scoped at `/` can
-answer those, which a project page at `/cos-wpt/` is not. The runner detects
-this and moves just those tests to a root-scoped mirror automatically; if none
-is configured they are reported as unrunnable rather than failing misleadingly.
+**Serving a mirror from the origin root matters.** Anything a test reaches
+through `get_host_info()` is addressed as *origin + a root-absolute path* —
+`cosOpenRemoteContext()` navigates to `/common/dispatcher/remote-executor.html`
+on it, `transfer` to `/cross-origin-storage/resources/transfer-receiver.html`.
+Only a worker scoped at `/` answers those, which a project page at `/cos-wpt/`
+is not.
+
+Which roles that constrains varies by test, and no single assignment satisfies
+all of them here: `permissions-policy` needs its own origin *and*
+`HTTPS_REMOTE_ORIGIN` root-scoped, while `transfer` needs its own origin *and*
+`HTTPS_NOTSAMESITE_ORIGIN`. With two root-scoped mirrors and one project page
+each is satisfiable, but only by a different arrangement. So the runner works
+out an assignment per test and passes it on the test's own URL
+(`?cos-remote=…&cos-notsamesite=…`), which the worker reads back when it
+generates `get-host-info.sub.js`. A test with no workable assignment is
+reported as unrunnable rather than left to fail misleadingly.
 
 Because `github.io` is on the Public Suffix List, every `*.github.io` site is
 its own site. `HTTPS_REMOTE_ORIGIN` is therefore cross-site here, where under
@@ -122,9 +131,12 @@ shown inline:
   bypasses service worker interception by design, so the generated worker script
   cannot be served from the virtual tree.
 
-Everything else runs. Against a Chromium build with `--enable-features=CrossOriginStorage`,
-this runner reproduces the same failures that `wpt run` reports for the same
-tests.
+Everything else runs. Against a Chromium build launched with
+`--enable-features=CrossOriginStorage`, a full run of the deployed site is
+**22 passed, 5 failed, 8 unrunnable** — and those five are exactly the files
+`wpt run` flags with "Unexpected subtest result" for the same build:
+`cross-mechanism-interop`, `declarative-css/cross-origin-storage`,
+`declarative-html/crossoriginstorage`, and both `import-attribute` tests.
 
 ## Using it
 

@@ -1,6 +1,7 @@
-# Copies this site to the mirror origins that serve HTTPS_REMOTE_ORIGIN and
-# HTTPS_NOTSAMESITE_ORIGIN. Skipped unless MIRROR_TOKEN is configured; see the
-# "Mirror origins" section of the README.
+# Keeps the two cross-origin mirrors in step with this site. Authentication is
+# a per-repository write deploy key rather than a personal access token; both
+# are installed by tools/setup-mirrors.sh. A target whose secret is missing is
+# skipped, so this is a no-op until the mirrors exist.
 name: Push to mirror origins
 
 on:
@@ -14,29 +15,38 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - cos-wpt-remote/cos-wpt-remote.github.io
-          - cos-wpt-alt/cos-wpt-alt.github.io
+        include:
+          - repo: cos-wpt-remote/cos-wpt-remote.github.io
+            secret: MIRROR_KEY_REMOTE
+          - repo: cos-wpt-alt/cos-wpt-alt.github.io
+            secret: MIRROR_KEY_ALT
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for a token
-        id: token
+      - name: Look for this mirror's deploy key
+        id: key
         env:
-          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
-        run: echo "present=${MIRROR_TOKEN:+yes}" >> "$GITHUB_OUTPUT"
+          DEPLOY_KEY: ${{ secrets[matrix.secret] }}
+        run: echo "present=${DEPLOY_KEY:+yes}" >> "$GITHUB_OUTPUT"
 
       - name: Push
-        if: steps.token.outputs.present == 'yes'
+        if: steps.key.outputs.present == 'yes'
         env:
-          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+          DEPLOY_KEY: ${{ secrets[matrix.secret] }}
         run: |
           set -euo pipefail
-          rm -rf .git
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/mirror_key
+          chmod 600 ~/.ssh/mirror_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+          # The mirror is the site alone: this repository's own workflows and
+          # tooling have no business running from it.
+          rm -rf .git .github tools
           git init -q -b main
           git config user.name "cos-wpt mirror"
           git config user.email "cos-wpt@users.noreply.github.com"
           git add -A
           git commit -q -m "Mirror of ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
-          git push -q --force \
-            "https://x-access-token:${MIRROR_TOKEN}@github.com/${{ matrix.target }}.git" main
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes" \
+            git push -q --force "git@github.com:${{ matrix.repo }}.git" main

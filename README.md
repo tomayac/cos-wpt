@@ -82,14 +82,16 @@ gives an account one origin, so the mirrors are separate `github.io` sites:
 
 To set them up:
 
-1. Create two free GitHub organisations, `cos-wpt-remote` and `cos-wpt-alt`.
-2. In each, create a **public repository named after the org**
-   (`cos-wpt-remote/cos-wpt-remote.github.io`), which GitHub serves at the
-   origin **root**.
-3. Create a fine-grained PAT with `contents: write` on both, and save it in this
-   repository as the `MIRROR_TOKEN` secret. [`mirror.yml`](.github/workflows/mirror.yml)
-   then force-pushes this site to both on every push to `main`.
-4. Enable Pages (deploy from branch `main`) on both mirror repositories.
+1. Create two free GitHub organisations, `cos-wpt-remote` and `cos-wpt-alt`, at
+   <https://github.com/organizations/new>. This is the only manual step —
+   GitHub has no API for creating an organisation.
+2. Run [`tools/setup-mirrors.sh`](tools/setup-mirrors.sh). It creates
+   `<org>/<org>.github.io` in each (which GitHub serves at the origin **root**),
+   installs a write deploy key per mirror so no personal access token is needed,
+   pushes the site, enables Pages, and waits for both to answer.
+
+[`mirror.yml`](.github/workflows/mirror.yml) then keeps them in step on every
+push to `main`, and skips any mirror whose deploy key is missing.
 
 Any host works — a mirror is just a copy of this repository — and the origins
 are editable in the runner's Settings panel, so `?remote=…&notsamesite=…` is

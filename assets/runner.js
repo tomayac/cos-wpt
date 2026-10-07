@@ -860,8 +860,8 @@ async function main() {
 
   push(self.isSecureContext ? 'ok' : 'bad', 'Secure context',
        self.isSecureContext ? '' : 'the tests need https');
-  const hasCos = 'crossOriginStorage' in navigator;
-  push(hasCos ? 'ok' : 'warn', 'navigator.crossOriginStorage',
+  const hasCos = typeof navigator.crossOriginStorage?.getFileHandle === 'function';
+  push(hasCos ? 'ok' : 'warn', 'navigator.crossOriginStorage.getFileHandle()',
        hasCos ? 'present' : 'missing — every test will fail until an implementation or extension provides it');
 
   let registration;

@@ -55,6 +55,7 @@ What the worker does:
 | `.any.js`, `.window.js` | Wrapper documents and worker scripts generated from the `// META:` directives, one per `global=` |
 | `?pipe=header(name,value)` | Parsed, unescaped and applied as real response headers — this is what makes the Permissions Policy test meaningful |
 | `.sub.js` template variables | Substituted from the configured origins |
+| `cross-origin-storage/resources/cos-resource.py`, `common/echo.py` | Reimplemented in the worker, since a static host runs no Python |
 
 Three pieces of infrastructure are replaced rather than proxied, because they
 depend on wptserve behaviour a static host cannot provide. They live in

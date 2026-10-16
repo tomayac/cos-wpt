@@ -202,6 +202,19 @@ async function serve(rawWptPath, url, event) {
   const shim = await serveShim(wptPath, config, event);
   if (shim !== null) return textResponse(shim, wptPath, pipeHeaders);
 
+  // The two wptserve Python handlers the COS suite uses, in JavaScript.
+  if (wptPath === 'cross-origin-storage/resources/cos-resource.py') {
+    return cosResource(url, config, pipeHeaders);
+  }
+  if (wptPath === 'common/echo.py') {
+    // Upstream's common/echo.py: the `content` parameter, as text/html.
+    const headers = new Headers(pipeHeaders || {});
+    headers.set('Content-Type', 'text/html');
+    headers.set('X-XSS-Protection', '0');
+    headers.set('Cache-Control', 'no-store');
+    return new Response(url.searchParams.get('content') ?? '', {headers});
+  }
+
   if (wptPath === 'common/dispatcher/dispatcher.py') {
     return new Response(
       'cos-wpt: the wptserve message queue is replaced by a postMessage ' +
@@ -222,6 +235,48 @@ async function serve(rawWptPath, url, event) {
   headers.set('Content-Type', mimeFor(wptPath));
   headers.set('Cache-Control', 'no-store');
   return new Response(source.body, {headers});
+}
+
+/**
+ * cross-origin-storage/resources/cos-resource.py, which serves bytes unique to
+ * the caller for the COS host integration tests: `content` verbatim for
+ * kind=text, or /fonts/Ahem.ttf or /css/support/60x60-green.png followed by a
+ * unique `token` for kind=font and kind=image. `type` sets Content-Type, and
+ * `allow`, if present, is sent as the Cross-Origin-Storage-Allow-Origin
+ * header. See the Python original for the details mirrored here.
+ */
+async function cosResource(url, config, pipeHeaders) {
+  const params = url.searchParams;
+  const kind = params.get('kind') || 'text';
+  const encode = (text) => new TextEncoder().encode(text || '');
+  const zeros = (n) => new Uint8Array(n);
+  let parts;
+  let type;
+  if (kind === 'font' || kind === 'image') {
+    const path = kind === 'font' ? 'fonts/Ahem.ttf' : 'css/support/60x60-green.png';
+    const source = await fetchSource(path, config);
+    if (!source) {
+      return new Response(`cos-wpt: no source for ${path}`, {
+        status: 502, headers: {'Content-Type': 'text/plain; charset=utf-8'},
+      });
+    }
+    const base = new Uint8Array(await source.arrayBuffer());
+    const token = encode(params.get('token'));
+    parts = kind === 'font'
+      ? [base, zeros(-base.length & 3), token, zeros(-token.length & 3)]
+      : [base, token];
+    type = params.get('type') || (kind === 'font' ? 'font/ttf' : 'image/png');
+  } else {
+    parts = [encode(params.get('content'))];
+    type = params.get('type') || 'text/plain';
+  }
+  const headers = new Headers(pipeHeaders || {});
+  headers.set('Content-Type', type);
+  headers.set('Cache-Control', 'no-store');
+  if (params.has('allow')) {
+    headers.set('Cross-Origin-Storage-Allow-Origin', params.get('allow'));
+  }
+  return new Response(new Blob(parts), {headers});
 }
 
 /* ------------------------------------------------------------------ source */

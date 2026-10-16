@@ -23,6 +23,16 @@
 
   post({type: 'loaded', url: location.href});
 
+  // Each subtest as it settles, so a file that times out still reports how
+  // far it got.
+  add_result_callback(function (test) {
+    post({
+      type: 'result',
+      url: location.href,
+      test: {name: test.name, status: test.status, message: test.message, stack: test.stack},
+    });
+  });
+
   add_completion_callback(function (tests, status, assertions) {
     post({
       type: 'done',

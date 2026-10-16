@@ -521,11 +521,15 @@ function runTest(test) {
     frame.setAttribute('allow', 'cross-origin-storage; fullscreen');
     frame.title = test.name;
     let settled = false;
+    const statusName = (n) => ['PASS', 'FAIL', 'TIMEOUT', 'NOTRUN', 'PRECONDITION_FAILED'][n] || 'FAIL';
+    // Subtests reported one by one, kept for a file that never completes.
+    const partial = [];
 
     const timer = setTimeout(() => finish({
       status: 'timeout',
-      tests: [],
-      message: `no result within ${Math.round(timeoutFor(test) / 1000)} s`,
+      tests: partial,
+      message: `no result within ${Math.round(timeoutFor(test) / 1000)} s` +
+          (partial.length ? `, after ${partial.length} subtest(s) settled` : ''),
     }), timeoutFor(test));
 
     function finish(result) {
@@ -541,10 +545,13 @@ function runTest(test) {
       const data = event.data;
       if (!data || data.magic !== 'cos-wpt-report') return;
       if (event.source !== frame.contentWindow) return;
+      if (data.type === 'result') {
+        partial.push({name: data.test.name, status: statusName(data.test.status), message: data.test.message || ''});
+        return;
+      }
       if (data.type !== 'done') return;
       const harnessStatus = ['OK', 'ERROR', 'TIMEOUT', 'PRECONDITION_FAILED'][data.status.status] || 'ERROR';
       const subtests = data.tests || [];
-      const statusName = (n) => ['PASS', 'FAIL', 'TIMEOUT', 'NOTRUN', 'PRECONDITION_FAILED'][n] || 'FAIL';
       const mapped = subtests.map((t) => ({
         name: t.name,
         status: statusName(t.status),

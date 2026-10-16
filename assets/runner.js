@@ -587,6 +587,8 @@ async function runAll(subset) {
   document.getElementById('run-all').disabled = false;
   document.getElementById('stop').disabled = true;
   render();
+  // For automation, such as a browser driver waiting on a full run.
+  window.dispatchEvent(new CustomEvent('cos-wpt:done', {detail: resultsJson()}));
 }
 
 /* ------------------------------------------------------------------- render */
@@ -975,7 +977,11 @@ async function main() {
 
   render();
 
-  if (new URLSearchParams(location.search).has('autorun')) runAll(visibleTests());
+  const params = new URLSearchParams(location.search);
+  if (params.has('filter')) document.getElementById('filter').value = params.get('filter');
+  render();
+  window.cosWpt = {state, resultsJson, runAll, visibleTests};
+  if (params.has('autorun')) runAll(visibleTests());
 }
 
 main();

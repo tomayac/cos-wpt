@@ -69,6 +69,24 @@ function deliver(uuid, payload) {
   else box.queue.push(payload);
 }
 
+// A test that opens a remote context as a top-level window (to put it under
+// another top-level site) has no frame to find it by, so remember the window
+// by the uuid in the URL it was opened with. The executor in it answers
+// through `self.opener`.
+if (typeof self.open === 'function') {
+  const nativeOpen = self.open;
+  self.open = function (url, ...rest) {
+    const opened = nativeOpen.call(this, url, ...rest);
+    try {
+      const uuid = new URL(String(url), location.href).searchParams.get('uuid');
+      if (uuid && opened) routes.set(uuid, opened);
+    } catch (e) {
+      // Not a URL we can read a uuid from; nothing to route.
+    }
+    return opened;
+  };
+}
+
 self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || data.magic !== MAGIC) return;

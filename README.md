@@ -148,7 +148,10 @@ Everything else runs. Against a Chromium build launched with
   head SHA and every subtest, for pasting into a bug or an issue.
 - **Refresh** drops the cached GitHub responses and re-reads the PR.
 - URL parameters: `?pr=`, `?repo=`, `?ref=` (the wpt ref used for
-  infrastructure), `?remote=`, `?notsamesite=`, `?autorun`.
+  infrastructure), `?remote=`, `?notsamesite=`, `?filter=` (prefills the
+  filter), `?autorun`.
+- For automation, `window.cosWpt` exposes `resultsJson()` and `runAll()`, and a
+  `cos-wpt:done` event carrying the results fires when a run ends.
 
 Unauthenticated GitHub API calls are limited to 60/hour per IP. The runner
 stores ETags and revalidates, and a `304` does not count against that limit, so

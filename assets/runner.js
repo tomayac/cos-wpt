@@ -400,7 +400,11 @@ async function buildTests(manifest) {
     // on it, and transfer.html to /cross-origin-storage/resources/… on it. So
     // each named role needs an origin whose worker is scoped at "/".
     const roles = [];
-    if (/HTTPS_ORIGIN/.test(source)) roles.push('self');
+    // integration-helpers.js addresses /cross-origin-storage/resources/… on
+    // the test's own origin, so a test loading it needs a root-scoped self.
+    if (/HTTPS_ORIGIN/.test(source) || /integration-helpers\.js/.test(source)) {
+      roles.push('self');
+    }
     if (/HTTPS_REMOTE_ORIGIN/.test(source)) roles.push('remote');
     if (/HTTPS_NOTSAMESITE_ORIGIN/.test(source)) roles.push('notsamesite');
     const needs = {

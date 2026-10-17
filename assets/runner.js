@@ -14,6 +14,9 @@ const DEFAULTS = {
   origins: {
     remote: 'https://cos-wpt-remote.github.io',
     notsamesite: 'https://cos-wpt-alt.github.io',
+    // A root-scoped origin for HTTPS_ORIGIN itself, for tests that address
+    // their own origin with a root-absolute path.
+    self: 'https://cos-wpt-self.github.io',
   },
   timeoutSeconds: 60,
   testHost: 'self',
@@ -54,6 +57,7 @@ function loadSettings() {
   if (params.has('ref')) settings.upstreamRef = params.get('ref');
   if (params.has('remote')) settings.origins.remote = params.get('remote');
   if (params.has('notsamesite')) settings.origins.notsamesite = params.get('notsamesite');
+  if (params.has('self')) settings.origins.self = params.get('self');
   return settings;
 }
 
@@ -789,6 +793,7 @@ function fillSettingsForm() {
   document.getElementById('upstream-ref').value = state.settings.upstreamRef;
   document.getElementById('origin-remote').value = state.settings.origins.remote || '';
   document.getElementById('origin-notsamesite').value = state.settings.origins.notsamesite || '';
+  document.getElementById('origin-self').value = state.settings.origins.self || '';
   document.getElementById('timeout').value = state.settings.timeoutSeconds;
 
   const select = document.getElementById('test-host');
@@ -831,6 +836,7 @@ function wireUi() {
     state.settings.upstreamRef = document.getElementById('upstream-ref').value.trim() || 'master';
     state.settings.origins.remote = document.getElementById('origin-remote').value.trim();
     state.settings.origins.notsamesite = document.getElementById('origin-notsamesite').value.trim();
+    state.settings.origins.self = document.getElementById('origin-self').value.trim();
     state.settings.timeoutSeconds = Number(document.getElementById('timeout').value) || DEFAULTS.timeoutSeconds;
     state.settings.testHost = document.getElementById('test-host').value;
     saveSettings();
@@ -912,7 +918,11 @@ async function main() {
   for (const note of manifest.notes) push('warn', 'GitHub', note);
 
   const mirrors = [];
-  for (const value of [state.settings.origins.remote, state.settings.origins.notsamesite]) {
+  for (const value of [
+    state.settings.origins.remote,
+    state.settings.origins.notsamesite,
+    state.settings.origins.self,
+  ]) {
     const trimmed = (value || '').trim();
     if (!trimmed) continue;
     try {

@@ -73,21 +73,24 @@ depend on wptserve behaviour a static host cannot provide. They live in
 
 ## Mirror origins
 
-Cross-origin tests need two more origins serving this same site. GitHub Pages
-gives an account one origin, so the mirrors are separate `github.io` sites:
+Cross-origin tests need more origins serving this same site. GitHub Pages
+gives an account one origin, so the mirrors are separate `github.io` sites, one
+per `get_host_info()` role:
 
 | Role | Origin |
 | --- | --- |
 | `HTTPS_REMOTE_ORIGIN` | [`cos-wpt-remote.github.io`](https://github.com/cos-wpt-remote/cos-wpt-remote.github.io) |
 | `HTTPS_NOTSAMESITE_ORIGIN` | [`cos-wpt-alt.github.io`](https://github.com/cos-wpt-alt/cos-wpt-alt.github.io) |
+| `HTTPS_ORIGIN`, root-scoped | [`cos-wpt-self.github.io`](https://github.com/cos-wpt-self/cos-wpt-self.github.io) |
 
-Both are already set up. To reproduce them from scratch:
+All three are already set up. To reproduce them from scratch:
 
-1. Create two free GitHub organisations at <https://github.com/organizations/new>.
+1. Create the free GitHub organisations at <https://github.com/organizations/new>.
    This is the only manual step — GitHub has no API for creating an organisation.
 2. Run [`tools/setup-mirrors.sh`](tools/setup-mirrors.sh), which creates
    `<org>/<org>.github.io` in each (GitHub serves those at the origin **root**),
-   configures Pages, and waits for both to answer.
+   configures Pages, and waits for them to answer. Pass org names to set up
+   only those, such as one just created.
 
 The mirrors pull rather than being pushed to: each holds nothing but a workflow
 that checks this public repository out and publishes it, hourly and on demand.
@@ -95,8 +98,8 @@ So there is no deploy key, no personal access token, and no second copy of the
 site to drift out of date.
 
 Any host works — a mirror is just a copy of this repository — and the origins
-are editable in the runner's Settings panel, so `?remote=…&notsamesite=…` is
-enough to try another pair without redeploying.
+are editable in the runner's Settings panel, so `?remote=…&notsamesite=…&self=…`
+is enough to try others without redeploying.
 
 **Serving a mirror from the origin root matters.** Anything a test reaches
 through `get_host_info()` is addressed as *origin + a root-absolute path* —
@@ -105,21 +108,20 @@ on it, `transfer` to `/cross-origin-storage/resources/transfer-receiver.html`.
 Only a worker scoped at `/` answers those, which a project page at `/cos-wpt/`
 is not.
 
-Which roles that constrains varies by test, and no single assignment satisfies
-all of them here: `permissions-policy` needs its own origin *and*
-`HTTPS_REMOTE_ORIGIN` root-scoped, while `transfer` needs its own origin *and*
-`HTTPS_NOTSAMESITE_ORIGIN`. With two root-scoped mirrors and one project page
-each is satisfiable, but only by a different arrangement. So the runner works
-out an assignment per test and passes it on the test's own URL
+Which roles that constrains varies by test: `permissions-policy` needs its own
+origin *and* `HTTPS_REMOTE_ORIGIN` root-scoped, while `transfer` needs all
+three. With three root-scoped mirrors every test has an assignment, though not
+always the same one. So the runner works out an assignment per test and passes it on the test's own URL
 (`?cos-remote=…&cos-notsamesite=…`), which the worker reads back when it
 generates `get-host-info.sub.js`. A test with no workable assignment is
 reported as unrunnable rather than left to fail misleadingly.
 
 Because `github.io` is on the Public Suffix List, every `*.github.io` site is
 its own site. `HTTPS_REMOTE_ORIGIN` is therefore cross-site here, where under
-wptserve it is same-site-but-cross-origin. The COS scoping rules are
-origin-based, so this does not change any expectation — but it does make the
-suite a slightly weaker test of the same-site tier than a real WPT run.
+wptserve it is same-site-but-cross-origin, and there is no same-site pair of
+origins at all. Subtests that read from a same-site origin fail here for that
+reason alone, and the cross-site pool's variants of one host collapse into a
+single origin.
 
 ## What cannot run here
 
@@ -132,12 +134,10 @@ shown inline:
   bypasses service worker interception by design, so the generated worker script
   cannot be served from the virtual tree.
 
-Everything else runs. Against a Chromium build launched with
-`--enable-features=CrossOriginStorage`, a full run of the deployed site is
-**22 passed, 5 failed, 8 unrunnable** — and those five are exactly the files
-`wpt run` flags with "Unexpected subtest result" for the same build:
-`cross-mechanism-interop`, `declarative-css/cross-origin-storage`,
-`declarative-html/crossoriginstorage`, and both `import-attribute` tests.
+Everything else runs. The
+[Cross-Origin Storage extension](https://github.com/web-ai-community/cross-origin-storage-extension)
+drives this runner from Playwright (`npm run test:wpt` there) and keeps a list
+of the subtests it expects to fail, each with the reason.
 
 ## Using it
 

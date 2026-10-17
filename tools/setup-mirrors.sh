@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
-# Sets up the two mirror origins that serve HTTPS_REMOTE_ORIGIN and
-# HTTPS_NOTSAMESITE_ORIGIN for the cross-origin tests.
+# Sets up the mirror origins the cross-origin tests run on: one each for
+# HTTPS_REMOTE_ORIGIN, HTTPS_NOTSAMESITE_ORIGIN, and HTTPS_ORIGIN, the test's
+# own origin, every one of them served from an origin root.
 #
-# GitHub has no API for creating an organisation, so create the two orgs first
+# GitHub has no API for creating an organisation, so create the orgs first
 # at https://github.com/organizations/new (the free plan is enough). Everything
 # after that is automated here.
 #
@@ -12,12 +13,17 @@
 # That needs no deploy key and no personal access token, and leaves nothing to
 # drift out of sync.
 #
-# Usage: tools/setup-mirrors.sh [remote-org] [alt-org]
+# Usage: tools/setup-mirrors.sh [org ...]
+#   With no arguments, sets up cos-wpt-remote, cos-wpt-alt, and cos-wpt-self.
+#   Name orgs to set up only those, such as a newly created one.
 
 set -euo pipefail
 
-REMOTE_ORG="${1:-cos-wpt-remote}"
-ALT_ORG="${2:-cos-wpt-alt}"
+if [ "$#" -gt 0 ]; then
+  ORGS=("$@")
+else
+  ORGS=(cos-wpt-remote cos-wpt-alt cos-wpt-self)
+fi
 SOURCE_REPO="${SOURCE_REPO:-tomayac/cos-wpt}"
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -97,8 +103,8 @@ A cross-origin mirror of [$SOURCE_REPO](https://github.com/$SOURCE_REPO), which
 runs the Cross-Origin Storage web platform tests.
 
 Those tests need origins other than the one serving the runner —
-\`HTTPS_REMOTE_ORIGIN\` and \`HTTPS_NOTSAMESITE_ORIGIN\` — and a GitHub account
-gets one origin. Hence this organisation, whose only purpose is to be a
+\`HTTPS_REMOTE_ORIGIN\`, \`HTTPS_NOTSAMESITE_ORIGIN\`, and a root-scoped
+\`HTTPS_ORIGIN\` — and a GitHub account gets one origin. Hence this organisation, whose only purpose is to be a
 different one. Serving from an organisation site rather than a project page
 matters too: only a service worker scoped at \`/\` can answer the root-absolute
 paths a couple of the tests hard-code.
@@ -118,10 +124,13 @@ EOF
   )
   echo "  pushed the publishing workflow"
 
+  # A push can enable Pages on its own between the check and the create, so
+  # a create that finds it enabled updates it instead.
   if gh api "repos/$repo/pages" >/dev/null 2>&1; then
     gh api -X PUT "repos/$repo/pages" -f build_type=workflow >/dev/null
   else
-    gh api -X POST "repos/$repo/pages" -f build_type=workflow >/dev/null
+    gh api -X POST "repos/$repo/pages" -f build_type=workflow >/dev/null 2>&1 ||
+      gh api -X PUT "repos/$repo/pages" -f build_type=workflow >/dev/null
   fi
   echo "  Pages set to build from the workflow"
 
@@ -147,11 +156,10 @@ EOF
   rm -rf "$work"
 }
 
-setup_mirror "$REMOTE_ORG"
-setup_mirror "$ALT_ORG"
+for org in "${ORGS[@]}"; do setup_mirror "$org"; done
 
-say 'Waiting for both mirrors to answer'
-for org in "$REMOTE_ORG" "$ALT_ORG"; do
+say 'Waiting for the mirrors to answer'
+for org in "${ORGS[@]}"; do
   for attempt in $(seq 1 40); do
     code="$(curl -s -o /dev/null -w '%{http_code}' "https://$org.github.io/sw.js")"
     if [ "$code" = 200 ]; then
@@ -167,13 +175,12 @@ done
 
 say 'Done'
 cat <<EOF
-The runner already defaults to these two origins. Open
+The runner already defaults to cos-wpt-remote, cos-wpt-alt, and cos-wpt-self.
+Open
 
   https://tomayac.github.io/cos-wpt/
 
 and the cross-origin tests should go from "unrunnable" to running. If you used
 organisation names other than the defaults, set them in the runner's Settings
-panel, or pass them as query parameters:
-
-  https://tomayac.github.io/cos-wpt/?remote=https://$REMOTE_ORG.github.io&notsamesite=https://$ALT_ORG.github.io
+panel, or pass them as the remote=, notsamesite=, and self= query parameters.
 EOF

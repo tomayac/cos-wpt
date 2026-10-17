@@ -411,6 +411,13 @@ async function buildTests(manifest) {
     }
     if (/HTTPS_REMOTE_ORIGIN/.test(source)) roles.push('remote');
     if (/HTTPS_NOTSAMESITE_ORIGIN/.test(source)) roles.push('notsamesite');
+    // cross-origin-helpers.js draws remote contexts from pools built out of
+    // every role's host, so a test loading it needs all three root-scoped.
+    if (/cross-origin-helpers\.js/.test(source)) {
+      for (const role of ['self', 'remote', 'notsamesite']) {
+        if (!roles.includes(role)) roles.push(role);
+      }
+    }
     const needs = {
       roles,
       needsRemoteOrigin: roles.includes('remote') || roles.includes('notsamesite'),

@@ -194,7 +194,15 @@ function textResponse(body, path, extraHeaders) {
 async function serve(rawWptPath, url, event) {
   const wptPath = REWRITES[rawWptPath] || rawWptPath;
   const config = (await readConfig()) || {};
-  const pipeHeaders = parsePipe(url.searchParams.get('pipe'));
+  // A `.headers` file next to a test adds its headers, as under wptserve, and
+  // `?pipe=header(…)` adds to those.
+  const assignment = {
+    remote: url.searchParams.get('cos-remote'),
+    notsamesite: url.searchParams.get('cos-notsamesite'),
+  };
+  const fileHeaders = await headersFile(wptPath, config, assignment);
+  const pipe = parsePipe(url.searchParams.get('pipe'));
+  const pipeHeaders = fileHeaders || pipe ? {...fileHeaders, ...pipe} : null;
 
   const generated = await generateVariant(wptPath, config);
   if (generated !== null) return textResponse(generated, wptPath, pipeHeaders);
@@ -229,7 +237,7 @@ async function serve(rawWptPath, url, event) {
     });
   }
   if (/\.sub\.(js|html|css|txt)$/.test(wptPath)) {
-    return textResponse(substitute(await source.text(), config), wptPath, pipeHeaders);
+    return textResponse(substitute(await source.text(), config, assignment), wptPath, pipeHeaders);
   }
   const headers = new Headers(pipeHeaders || {});
   headers.set('Content-Type', mimeFor(wptPath));
@@ -528,12 +536,39 @@ function get_port(loc) {
 `;
 }
 
+/**
+ * The headers of `<path>.sub.headers` or `<path>.headers`, when the pull
+ * request has one: a `Name: value` line each, the first with template
+ * substitution. Only the PR's own files are looked for, so a request costs no
+ * extra fetch for files that have none.
+ */
+async function headersFile(wptPath, config, assignment) {
+  const files = config.files || {};
+  const sub = `${wptPath}.sub.headers`;
+  const plain = `${wptPath}.headers`;
+  const path = files[sub] ? sub : files[plain] ? plain : null;
+  if (!path) return null;
+  let text = await sourceText(path, config);
+  if (text === null) return null;
+  if (path === sub) text = substitute(text, config, assignment);
+  const headers = {};
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^([^:#\s][^:]*):\s*(.*)$/);
+    if (!m) continue;
+    const name = m[1].trim();
+    headers[name] = headers[name] ? `${headers[name]}, ${m[2]}` : m[2];
+  }
+  return Object.keys(headers).length ? headers : null;
+}
+
 /** Best-effort wptserve template substitution for other `.sub.` files. */
-function substitute(text, config) {
+function substitute(text, config, assignment) {
   const origins = config.origins || {};
+  const remote = (assignment && assignment.remote) || origins.remote;
+  const notsamesite = (assignment && assignment.notsamesite) || origins.notsamesite;
   const selfHost = self.location.host;
-  const remoteHost = origins.remote ? new URL(origins.remote).host : selfHost;
-  const altHost = origins.notsamesite ? new URL(origins.notsamesite).host : selfHost;
+  const remoteHost = remote ? new URL(remote).host : selfHost;
+  const altHost = notsamesite ? new URL(notsamesite).host : selfHost;
   return text
     .replace(/\{\{host\}\}/g, selfHost)
     .replace(/\{\{location\[host\]\}\}/g, selfHost)

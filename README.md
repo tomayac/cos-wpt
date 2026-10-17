@@ -54,6 +54,7 @@ What the worker does:
 | `/resources/WebIDLParser.js` | Rewritten to `/resources/webidl2/lib/webidl2.js`, as `tools/serve/serve.py` does |
 | `.any.js`, `.window.js` | Wrapper documents and worker scripts generated from the `// META:` directives, one per `global=` |
 | `?pipe=header(name,value)` | Parsed, unescaped and applied as real response headers — this is what makes the Permissions Policy test meaningful |
+| `<test>.headers`, `<test>.sub.headers` | Applied to the test's own response, with template substitution for `.sub.headers` |
 | `.sub.js` template variables | Substituted from the configured origins |
 | `cross-origin-storage/resources/cos-resource.py`, `common/echo.py` | Reimplemented in the worker, since a static host runs no Python |
 

@@ -32,6 +32,7 @@ const state = {
   manifest: null,
   tests: [],
   origins: [],          // [{origin, scope, rootScoped, ok, error}]
+  sites: {},            // origin -> schemeful site, from the Public Suffix List
   running: false,
   abort: false,
   worker: null,
@@ -379,128 +380,122 @@ function unrunnableReason(test, env) {
            `${test.roles.join(', ')}, and each of those has to be served from an ` +
            'origin root so that /common/dispatcher/remote-executor.html resolves there';
   }
-  const infeasible = INFEASIBLE_FILES[test.name];
-  if (infeasible) return infeasible;
   return null;
 }
 
-/* ------------------------------------------------- known infeasible results */
+/* ------------------------------------------------------------ site lookup */
 
-// Tests that cannot pass on a static host for reasons unrelated to the
-// browser under test. They pass under wptserve, so a failure here says
-// nothing about the implementation.
-
-const REASON_SERVICE_WORKER_SCRIPT =
-    'registers its own service worker, whose script request bypasses the ' +
-    'worker that serves this tree, so the static mirror answers 404';
-
-const REASON_SAME_SITE =
-    'needs an origin same site with the test, and every github.io mirror is ' +
-    'its own site (github.io is on the Public Suffix List), so the ' +
-    '"same-site" origin here is cross-site';
-
-const REASON_ONE_CROSS_SITE_ORIGIN =
-    'needs two distinct cross-site origins, and HTTPS_NOTSAMESITE_ORIGIN and ' +
-    'HTTPS_OTHER_NOTSAMESITE_ORIGIN are one mirror here, so the origin meant ' +
-    'to be dropped or unlisted is the very origin the test allowed';
-
-// Whole files that cannot run here, reported as unrunnable.
-const INFEASIBLE_FILES = {
-  'cross-origin-storage/fetch/fetch-service-worker.tentative.https.html':
-      REASON_SERVICE_WORKER_SCRIPT,
-  'cross-origin-storage/fetch/fetch-service-worker.tentative.optional.https.html':
-      REASON_SERVICE_WORKER_SCRIPT,
-  'cross-origin-storage/top-level-site-keying.tentative.https.html':
-      'opens remote contexts as top-level windows, which the popup blocker ' +
-      'stops without a user gesture, and which, once allowed, load outside ' +
-      'the mirror\'s service worker: that worker is partitioned under this ' +
-      'runner\'s top-level site, so the static host answers 404 for the ' +
-      'executor page',
-};
-
-// Single subtests that cannot pass here, in files that otherwise run. `when`
-// says in which setup the limitation applies.
-const INFEASIBLE_SUBTESTS = [
-  {
-    test: 'cross-origin-storage/permissions-policy-workers.tentative.https.html',
-    subtest: 'a service worker cannot use crossOriginStorage (empty owner set fails closed)',
-    when: 'always',
-    reason: REASON_SERVICE_WORKER_SCRIPT,
-  },
-  {
-    test: 'cross-origin-storage/allow-origin-header.tentative.https.html',
-    subtest: 'ceiling: an origin absent from the Cross-Origin-Storage-Allow-Origin header is dropped from the list, deterministically',
-    when: 'always',
-    reason: REASON_ONE_CROSS_SITE_ORIGIN,
-  },
-  {
-    test: 'cross-origin-storage/origins-scoping.tentative.https.html',
-    subtest: 'list tier: an origin absent from the explicit list is never authorized, deterministically',
-    when: 'always',
-    reason: REASON_ONE_CROSS_SITE_ORIGIN,
-  },
-  {
-    test: 'cross-origin-storage/origins-scoping.tentative.https.html',
-    subtest: 'same-site baseline: a same-site sibling origin is authorized, deterministically',
-    when: 'github.io',
-    reason: REASON_SAME_SITE,
-  },
-  {
-    test: 'cross-origin-storage/origins-scoping.tentative.https.html',
-    subtest: 'list tier: an origin same site with a listed origin is authorized, deterministically',
-    when: 'github.io',
-    reason: REASON_SAME_SITE,
-  },
-  {
-    test: 'cross-origin-storage/visibility-upgrade-list-preserved.tentative.https.html',
-    subtest: 'a "*" write preserves the same-site baseline of an entry first written same-site',
-    when: 'github.io',
-    reason: REASON_SAME_SITE,
-  },
-  {
-    test: 'cross-origin-storage/css/cross-origin-storage-cross-origin.tentative.https.html',
-    subtest: 'CSS, cross-origin: a same-site origin is always served a same-site-scoped @font-face from COS',
-    when: 'github.io',
-    reason: REASON_SAME_SITE,
-  },
-  {
-    test: 'cross-origin-storage/html/crossoriginstorage-cross-origin.tentative.https.html',
-    subtest: 'HTML, cross-origin: a same-site origin is always served a same-site-scoped <link> from COS',
-    when: 'github.io',
-    reason: REASON_SAME_SITE,
-  },
-  {
-    test: 'cross-origin-storage/fetch/fetch-cross-origin.tentative.https.html',
-    subtest: 'fetch, cross-origin: a same-site origin is always served an entry the fetch integration stored',
-    when: 'github.io',
-    reason: REASON_SAME_SITE,
-  },
+// Which origins are same-site decides whether a test's premise holds here, and
+// that takes the Public Suffix List: github.io is on it, so every github.io
+// site is its own site. The list is fetched once per page load.
+const PUBLIC_SUFFIX_LISTS = [
+  'https://publicsuffix.org/list/public_suffix_list.dat',
+  'https://raw.githubusercontent.com/publicsuffix/list/main/public_suffix_list.dat',
 ];
 
-// Whether every origin in use is a github.io site, where no two are same-site.
-function mirrorsAreGithubIo() {
-  const origins = (state.origins || []).map((o) => o.origin);
-  return origins.length > 1 &&
-      origins.every((o) => new URL(o).hostname.endsWith('.github.io'));
+async function loadPublicSuffixRules() {
+  for (const url of PUBLIC_SUFFIX_LISTS) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) continue;
+      const rules = {exact: new Set(), wildcard: new Set(), exception: new Set()};
+      for (const raw of (await response.text()).split('\n')) {
+        const line = raw.trim().toLowerCase();
+        if (!line || line.startsWith('//')) continue;
+        if (line.startsWith('!')) rules.exception.add(line.slice(1));
+        else if (line.startsWith('*.')) rules.wildcard.add(line.slice(2));
+        else rules.exact.add(line);
+      }
+      return rules;
+    } catch (e) {
+      // Try the next copy.
+    }
+  }
+  return null;
 }
 
-// Relabels the failing subtests that cannot pass here as INFEASIBLE, keeping
-// what they reported. A subtest that passes is left alone, so the list never
-// hides a pass.
-function markInfeasible(testName, subtests) {
-  return subtests.map((sub) => {
-    if (sub.status === 'PASS') return sub;
-    const known = INFEASIBLE_SUBTESTS.find((k) =>
-      k.test === testName && k.subtest === sub.name &&
-      (k.when === 'always' || (k.when === 'github.io' && mirrorsAreGithubIo())));
-    if (!known) return sub;
-    return {
-      ...sub,
-      status: 'INFEASIBLE',
-      message: `Cannot pass here: ${known.reason}. ` +
-               `Reported ${sub.status}${sub.message ? `: ${sub.message}` : ''}`,
-    };
+// The registrable domain (eTLD+1) of `host`, following the list's algorithm:
+// the longest matching rule wins, an exception rule removes one label from
+// its match, and an unlisted name falls back to the implicit "*" rule.
+function registrableDomain(host, rules) {
+  if (/^[\d.]+$/.test(host) || host.includes(':') || !host.includes('.')) return host;
+  const labels = host.toLowerCase().split('.');
+  let suffixLength = 1;
+  for (let i = 0; i < labels.length; i++) {
+    const candidate = labels.slice(i).join('.');
+    if (rules.exception.has(candidate)) {
+      suffixLength = labels.length - i - 1;
+      break;
+    }
+    const parent = labels.slice(i + 1).join('.');
+    if (rules.exact.has(candidate) || (i + 1 < labels.length && rules.wildcard.has(parent))) {
+      suffixLength = labels.length - i;
+      break;
+    }
+  }
+  if (suffixLength >= labels.length) return host;
+  return labels.slice(labels.length - suffixLength - 1).join('.');
+}
+
+// Maps each origin in use to its schemeful site, for the tests to compare
+// against. Empty when the list could not be fetched, in which case the tests
+// skip the same-site check and report the other broken premises only.
+async function computeSites() {
+  const rules = await loadPublicSuffixRules();
+  if (!rules) return {};
+  const sites = {};
+  for (const origin of new Set([location.origin, ...state.origins.map((o) => o.origin)])) {
+    const url = new URL(origin);
+    sites[url.origin] = `${url.protocol}//${registrableDomain(url.hostname, rules)}`;
+  }
+  return sites;
+}
+
+/* ------------------------------------------------------- infeasible results */
+
+// A test frame reports when a subtest's premise does not hold here: an origin
+// its helpers give as same-site is not, a pool hands out the same origin
+// twice, a service worker script cannot be fetched, or a top-level window is
+// blocked or never answers. See shims/testharnessreport.js and
+// shims/dispatcher.js. A failing subtest with such a report says nothing
+// about the browser, so it is relabeled INFEASIBLE, keeping what it reported.
+// A subtest that passes is left alone.
+function applyInfeasibleReports(subtests, reports) {
+  const reasons = new Map();
+  for (const {test, reason} of reports) {
+    if (!reasons.has(test)) reasons.set(test, []);
+    if (!reasons.get(test).includes(reason)) reasons.get(test).push(reason);
+  }
+  const relabel = (sub, why) => ({
+    ...sub,
+    status: 'INFEASIBLE',
+    message: `Cannot pass here: ${why.join(' ')}` +
+             (sub.status ? ` Reported ${sub.status}${sub.message ? `: ${sub.message}` : ''}` : ''),
   });
+  const out = subtests.map((sub) => {
+    const why = reasons.get(sub.name);
+    return sub.status === 'PASS' || !why ? sub : relabel(sub, why);
+  });
+  // A subtest that never settled, because the file timed out on it, still
+  // gets its row.
+  for (const [name, why] of reasons) {
+    if (!out.some((sub) => sub.name === name)) out.push(relabel({name, status: '', message: ''}, why));
+  }
+  return out;
+}
+
+// A file is infeasible when nothing in it could be meaningfully tested: it
+// stopped on an infeasible subtest, or every subtest that did not pass was
+// infeasible or never ran because of one.
+function fileStatus(harnessStatus, subtests) {
+  const infeasible = subtests.some((t) => t.status === 'INFEASIBLE');
+  const passed = subtests.some((t) => t.status === 'PASS');
+  const failing = subtests.filter((t) => t.status !== 'PASS' && t.status !== 'INFEASIBLE');
+  if (harnessStatus !== 'OK') return infeasible ? 'infeasible' : harnessStatus.toLowerCase();
+  if (failing.length) {
+    return infeasible && failing.every((t) => t.status === 'NOTRUN') ? 'infeasible' : 'fail';
+  }
+  return infeasible && !passed ? 'infeasible' : 'pass';
 }
 
 async function buildTests(manifest) {
@@ -643,6 +638,11 @@ function testUrl(test) {
     if (assignment.remote) url.searchParams.set('cos-remote', assignment.remote);
     if (assignment.notsamesite) url.searchParams.set('cos-notsamesite', assignment.notsamesite);
   }
+  // Read by shims/testharnessreport.js to tell when a helper's "same-site"
+  // origin is not.
+  if (state.sites && Object.keys(state.sites).length) {
+    url.searchParams.set('cos-sites', JSON.stringify(state.sites));
+  }
   return url.href;
 }
 
@@ -660,13 +660,19 @@ function runTest(test) {
     const statusName = (n) => ['PASS', 'FAIL', 'TIMEOUT', 'NOTRUN', 'PRECONDITION_FAILED'][n] || 'FAIL';
     // Subtests reported one by one, kept for a file that never completes.
     const partial = [];
+    // Subtests whose premise does not hold here, see applyInfeasibleReports().
+    const reports = [];
 
-    const timer = setTimeout(() => finish({
-      status: 'timeout',
-      tests: partial,
-      message: `no result within ${Math.round(timeoutFor(test) / 1000)} s` +
-          (partial.length ? `, after ${partial.length} subtest(s) settled` : ''),
-    }), timeoutFor(test));
+    const timer = setTimeout(() => {
+      const tests = applyInfeasibleReports(partial, reports);
+      const infeasible = tests.some((t) => t.status === 'INFEASIBLE');
+      finish({
+        status: infeasible ? 'infeasible' : 'timeout',
+        tests,
+        message: `no result within ${Math.round(timeoutFor(test) / 1000)} s` +
+            (partial.length ? `, after ${partial.length} subtest(s) settled` : ''),
+      });
+    }, timeoutFor(test));
 
     function finish(result) {
       if (settled) return;
@@ -685,18 +691,19 @@ function runTest(test) {
         partial.push({name: data.test.name, status: statusName(data.test.status), message: data.test.message || ''});
         return;
       }
+      if (data.type === 'infeasible') {
+        reports.push({test: data.test, reason: data.reason});
+        return;
+      }
       if (data.type !== 'done') return;
       const harnessStatus = ['OK', 'ERROR', 'TIMEOUT', 'PRECONDITION_FAILED'][data.status.status] || 'ERROR';
       const subtests = data.tests || [];
-      const mapped = markInfeasible(test.name, subtests.map((t) => ({
+      const mapped = applyInfeasibleReports(subtests.map((t) => ({
         name: t.name,
         status: statusName(t.status),
         message: t.message || '',
-      })));
-      let status;
-      if (harnessStatus !== 'OK') status = harnessStatus.toLowerCase();
-      else if (mapped.some((t) => t.status !== 'PASS' && t.status !== 'INFEASIBLE')) status = 'fail';
-      else status = 'pass';
+      })), reports);
+      const status = fileStatus(harnessStatus, mapped);
       finish({status, tests: mapped, message: data.status.message || ''});
     }
 
@@ -779,6 +786,7 @@ function render() {
   for (const test of state.tests) {
     if (test.reason) counts.skip++;
     else if (!test.result) counts.other++;
+    else if (test.result.status === 'infeasible') counts.skip++;
     else if (test.result.status === 'pass') counts.pass++;
     else if (test.result.status === 'running') counts.other++;
     else counts.fail++;
@@ -1090,6 +1098,17 @@ async function main() {
     state.origins.push(result);
     push(result.ok ? 'ok' : 'warn', `Mirror ${mirror.origin}`,
          result.ok ? `scope ${result.scope}${result.rootScoped ? ' (origin root)' : ''}` : result.error);
+  }
+
+  state.sites = await computeSites();
+  if (Object.keys(state.sites).length) {
+    const distinct = new Set(Object.values(state.sites)).size;
+    push('ok', 'Sites',
+         `${Object.keys(state.sites).length} origins in use, ${distinct} distinct site(s), ` +
+         'from the Public Suffix List');
+  } else {
+    push('warn', 'Sites',
+         'the Public Suffix List could not be fetched, so same-site premises are not checked');
   }
 
   const hasMirrors = state.origins.filter((o) => o.ok && o.origin !== location.origin).length >= 2;

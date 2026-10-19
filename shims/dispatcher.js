@@ -73,15 +73,43 @@ function deliver(uuid, payload) {
 // another top-level site) has no frame to find it by, so remember the window
 // by the uuid in the URL it was opened with. The executor in it answers
 // through `self.opener`.
+// Windows this document opened, and whether each has spoken to us yet.
+const answered = new Set();
+// How long an opened executor gets to answer before the subtest that opened
+// it is reported infeasible. Loading the executor page and its scripts takes
+// well under this; a window that has not answered by then never will.
+const TOP_LEVEL_ANSWER_MS = 6000;
+
 if (typeof self.open === 'function') {
   const nativeOpen = self.open;
   self.open = function (url, ...rest) {
+    // The subtest that opened the window, captured now: by the time the
+    // window fails to answer, another subtest may be running.
+    const test = typeof self.cosWptCurrentTest === 'function' ? self.cosWptCurrentTest() : null;
+    const report = (reason) => {
+      if (typeof self.cosWptInfeasible === 'function') self.cosWptInfeasible(reason, test);
+    };
     const opened = nativeOpen.call(this, url, ...rest);
+    let target = String(url);
     try {
-      const uuid = new URL(String(url), location.href).searchParams.get('uuid');
+      const parsed = new URL(String(url), location.href);
+      target = parsed.origin;
+      const uuid = parsed.searchParams.get('uuid');
       if (uuid && opened) routes.set(uuid, opened);
     } catch (e) {
       // Not a URL we can read a uuid from; nothing to route.
+    }
+    if (!opened) {
+      report(`window.open() of ${target} was blocked: opening a top-level window ` +
+             'from a frame without a user gesture needs popup blocking turned off.');
+    } else {
+      setTimeout(() => {
+        if (answered.has(opened)) return;
+        report(`the top-level window opened on ${target} never answered. A mirror's ` +
+               'service worker registered from this runner is partitioned under the ' +
+               "runner's top-level site, so a top-level window on the mirror loads " +
+               'from the static host, which has no executor page.');
+      }, TOP_LEVEL_ANSWER_MS);
     }
     return opened;
   };
@@ -90,6 +118,7 @@ if (typeof self.open === 'function') {
 self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || data.magic !== MAGIC) return;
+  if (event.source) answered.add(event.source);
   if (data.kind === 'ack') {
     const waiter = ackWaiters.get(data.id);
     if (waiter) waiter();

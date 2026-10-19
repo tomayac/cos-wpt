@@ -134,30 +134,36 @@ shown inline:
 - **`*.any.serviceworker.html`** variants. A service worker script request
   bypasses service worker interception by design, so the generated worker script
   cannot be served from the virtual tree.
-- **`fetch/fetch-service-worker.*`** registers its own service worker, and for
-  the same reason its script answers 404 from the static mirror.
-- **`top-level-site-keying`** opens remote contexts as top-level windows. The
-  popup blocker stops them without a user gesture, and once allowed they load
-  outside the mirror's service worker, which is partitioned under the runner's
-  top-level site, so the executor page answers 404.
 
-A few single subtests cannot pass here either, in files that otherwise run.
-The runner reports them as `INFEASIBLE`, with the reason and what the subtest
-reported, and a file whose other subtests all pass counts as passed:
+Other subtests cannot pass here for reasons unrelated to the browser under
+test. Nothing lists them: the test frame watches for the moment a subtest's
+premise breaks and tells the runner, so a new test with the same limitation is
+classified without any change here. A subtest whose premise broke and that then
+fails is reported as `INFEASIBLE`, with the reason and what it reported:
 
-- Subtests that read from an origin **same site** with the test. Every
-  `github.io` mirror is its own site, so there is no same-site pair. Applied
-  only when all origins are on `github.io`.
-- Subtests that need **two distinct cross-site origins**.
-  `HTTPS_NOTSAMESITE_ORIGIN` and `HTTPS_OTHER_NOTSAMESITE_ORIGIN` are one mirror
-  here, so the origin meant to be dropped or unlisted is the one the test
-  allowed.
-- The **service worker** subtest of `permissions-policy-workers`, for the
-  service worker script reason above.
+- **Origin pools.** The tests pick partner origins with
+  `cosNextSameSiteOrigin()` and `cosNextCrossSiteOrigin()`.
+  `shims/testharnessreport.js` wraps both and reports a pick that is not the
+  kind of site it claims, that is the document's own origin, or that repeats
+  within one subtest. Every `github.io` mirror is its own site, since
+  `github.io` is on the Public Suffix List, so there is no same-site pair, and
+  `HTTPS_NOTSAMESITE_ORIGIN` and `HTTPS_OTHER_NOTSAMESITE_ORIGIN` are one
+  mirror. The runner fetches the Public Suffix List to decide what is same-site,
+  and skips this check if it cannot.
+- **Service workers.** A test that registers its own service worker gets a
+  `TypeError` from `register()`, since the script request bypasses the worker
+  that serves this tree and the static host does not have the file.
+- **Top-level windows.** `shims/dispatcher.js` reports a `window.open()` that
+  the popup blocker stopped, and an opened window that never answers. A
+  mirror's service worker registered from the runner is partitioned under the
+  runner's top-level site, so a top-level window on the mirror loads from the
+  static host, which has no executor page.
 
-The lists are `INFEASIBLE_FILES` and `INFEASIBLE_SUBTESTS` in
-[`assets/runner.js`](assets/runner.js). Only failing subtests are relabeled, so a
-subtest on the list that passes is still reported as a pass.
+A file whose other subtests all pass counts as passed. A file that stopped on an
+infeasible subtest, or in which nothing could be tested, is reported as
+`infeasible` and counted as unrunnable here. Only failing subtests are
+relabeled, so a subtest whose premise broke and that passed anyway is still
+reported as a pass.
 
 Everything else runs. The
 [Cross-Origin Storage extension](https://github.com/web-ai-community/cross-origin-storage-extension)

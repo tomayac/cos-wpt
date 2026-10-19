@@ -98,6 +98,12 @@ that checks this public repository out and publishes it, hourly and on demand.
 So there is no deploy key, no personal access token, and no second copy of the
 site to drift out of date.
 
+GitHub disables a scheduled workflow after 60 days without activity in its
+repository, and a mirror's repository never changes on its own. So the same
+workflow has a `keepalive` job: on a scheduled run, once the mirror's newest
+commit is 30 days old, it pushes an empty commit to the mirror, which keeps the
+hourly publish running.
+
 Any host works — a mirror is just a copy of this repository — and the origins
 are editable in the runner's Settings panel, so `?remote=…&notsamesite=…&self=…`
 is enough to try others without redeploying.

@@ -153,7 +153,9 @@ of the subtests it expects to fail, each with the reason.
   infrastructure), `?remote=`, `?notsamesite=`, `?filter=` (prefills the
   filter), `?autorun`.
 - For automation, `window.cosWpt` exposes `resultsJson()` and `runAll()`, and a
-  `cos-wpt:done` event carrying the results fires when a run ends.
+  `cos-wpt:done` event carrying the results fires when a run ends. `runAll()`
+  with no argument runs the tests the filter shows, as **Run all** does; pass
+  an array from `visibleTests()` to run a subset.
 
 Unauthenticated GitHub API calls are limited to 60/hour per IP. The runner
 stores ETags and revalidates, and a `304` does not count against that limit, so

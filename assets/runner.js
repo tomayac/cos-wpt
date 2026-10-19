@@ -586,29 +586,36 @@ function runTest(test) {
   });
 }
 
-async function runAll(subset) {
+// Runs `subset`, by default the tests the filter shows, which is what the
+// Run all button runs. Automation can call `window.cosWpt.runAll()` with no
+// argument.
+async function runAll(subset = visibleTests()) {
   if (state.running) return;
   state.running = true;
   state.abort = false;
   document.getElementById('run-all').disabled = true;
   document.getElementById('stop').disabled = false;
 
-  for (const test of subset) {
-    if (state.abort) break;
-    if (test.reason) continue;
-    test.result = {status: 'running', tests: []};
-    render();
-    // Tests share one Cross-Origin Storage registry, so they run one at a
-    // time rather than racing each other for it.
-    test.result = await runTest(test);
+  try {
+    for (const test of subset) {
+      if (state.abort) break;
+      if (test.reason) continue;
+      test.result = {status: 'running', tests: []};
+      render();
+      // Tests share one Cross-Origin Storage registry, so they run one at a
+      // time rather than racing each other for it.
+      test.result = await runTest(test);
+      render();
+    }
+  } finally {
+    // Reset even when the run throws, so the runner never stays stuck in a
+    // running state that ignores every later Run all.
+    state.running = false;
+    state.abort = false;
+    document.getElementById('run-all').disabled = false;
+    document.getElementById('stop').disabled = true;
     render();
   }
-
-  state.running = false;
-  state.abort = false;
-  document.getElementById('run-all').disabled = false;
-  document.getElementById('stop').disabled = true;
-  render();
   // For automation, such as a browser driver waiting on a full run.
   window.dispatchEvent(new CustomEvent('cos-wpt:done', {detail: resultsJson()}));
 }

@@ -379,7 +379,128 @@ function unrunnableReason(test, env) {
            `${test.roles.join(', ')}, and each of those has to be served from an ` +
            'origin root so that /common/dispatcher/remote-executor.html resolves there';
   }
+  const infeasible = INFEASIBLE_FILES[test.name];
+  if (infeasible) return infeasible;
   return null;
+}
+
+/* ------------------------------------------------- known infeasible results */
+
+// Tests that cannot pass on a static host for reasons unrelated to the
+// browser under test. They pass under wptserve, so a failure here says
+// nothing about the implementation.
+
+const REASON_SERVICE_WORKER_SCRIPT =
+    'registers its own service worker, whose script request bypasses the ' +
+    'worker that serves this tree, so the static mirror answers 404';
+
+const REASON_SAME_SITE =
+    'needs an origin same site with the test, and every github.io mirror is ' +
+    'its own site (github.io is on the Public Suffix List), so the ' +
+    '"same-site" origin here is cross-site';
+
+const REASON_ONE_CROSS_SITE_ORIGIN =
+    'needs two distinct cross-site origins, and HTTPS_NOTSAMESITE_ORIGIN and ' +
+    'HTTPS_OTHER_NOTSAMESITE_ORIGIN are one mirror here, so the origin meant ' +
+    'to be dropped or unlisted is the very origin the test allowed';
+
+// Whole files that cannot run here, reported as unrunnable.
+const INFEASIBLE_FILES = {
+  'cross-origin-storage/fetch/fetch-service-worker.tentative.https.html':
+      REASON_SERVICE_WORKER_SCRIPT,
+  'cross-origin-storage/fetch/fetch-service-worker.tentative.optional.https.html':
+      REASON_SERVICE_WORKER_SCRIPT,
+  'cross-origin-storage/top-level-site-keying.tentative.https.html':
+      'opens remote contexts as top-level windows, which the popup blocker ' +
+      'stops without a user gesture, and which, once allowed, load outside ' +
+      'the mirror\'s service worker: that worker is partitioned under this ' +
+      'runner\'s top-level site, so the static host answers 404 for the ' +
+      'executor page',
+};
+
+// Single subtests that cannot pass here, in files that otherwise run. `when`
+// says in which setup the limitation applies.
+const INFEASIBLE_SUBTESTS = [
+  {
+    test: 'cross-origin-storage/permissions-policy-workers.tentative.https.html',
+    subtest: 'a service worker cannot use crossOriginStorage (empty owner set fails closed)',
+    when: 'always',
+    reason: REASON_SERVICE_WORKER_SCRIPT,
+  },
+  {
+    test: 'cross-origin-storage/allow-origin-header.tentative.https.html',
+    subtest: 'ceiling: an origin absent from the Cross-Origin-Storage-Allow-Origin header is dropped from the list, deterministically',
+    when: 'always',
+    reason: REASON_ONE_CROSS_SITE_ORIGIN,
+  },
+  {
+    test: 'cross-origin-storage/origins-scoping.tentative.https.html',
+    subtest: 'list tier: an origin absent from the explicit list is never authorized, deterministically',
+    when: 'always',
+    reason: REASON_ONE_CROSS_SITE_ORIGIN,
+  },
+  {
+    test: 'cross-origin-storage/origins-scoping.tentative.https.html',
+    subtest: 'same-site baseline: a same-site sibling origin is authorized, deterministically',
+    when: 'github.io',
+    reason: REASON_SAME_SITE,
+  },
+  {
+    test: 'cross-origin-storage/origins-scoping.tentative.https.html',
+    subtest: 'list tier: an origin same site with a listed origin is authorized, deterministically',
+    when: 'github.io',
+    reason: REASON_SAME_SITE,
+  },
+  {
+    test: 'cross-origin-storage/visibility-upgrade-list-preserved.tentative.https.html',
+    subtest: 'a "*" write preserves the same-site baseline of an entry first written same-site',
+    when: 'github.io',
+    reason: REASON_SAME_SITE,
+  },
+  {
+    test: 'cross-origin-storage/css/cross-origin-storage-cross-origin.tentative.https.html',
+    subtest: 'CSS, cross-origin: a same-site origin is always served a same-site-scoped @font-face from COS',
+    when: 'github.io',
+    reason: REASON_SAME_SITE,
+  },
+  {
+    test: 'cross-origin-storage/html/crossoriginstorage-cross-origin.tentative.https.html',
+    subtest: 'HTML, cross-origin: a same-site origin is always served a same-site-scoped <link> from COS',
+    when: 'github.io',
+    reason: REASON_SAME_SITE,
+  },
+  {
+    test: 'cross-origin-storage/fetch/fetch-cross-origin.tentative.https.html',
+    subtest: 'fetch, cross-origin: a same-site origin is always served an entry the fetch integration stored',
+    when: 'github.io',
+    reason: REASON_SAME_SITE,
+  },
+];
+
+// Whether every origin in use is a github.io site, where no two are same-site.
+function mirrorsAreGithubIo() {
+  const origins = (state.origins || []).map((o) => o.origin);
+  return origins.length > 1 &&
+      origins.every((o) => new URL(o).hostname.endsWith('.github.io'));
+}
+
+// Relabels the failing subtests that cannot pass here as INFEASIBLE, keeping
+// what they reported. A subtest that passes is left alone, so the list never
+// hides a pass.
+function markInfeasible(testName, subtests) {
+  return subtests.map((sub) => {
+    if (sub.status === 'PASS') return sub;
+    const known = INFEASIBLE_SUBTESTS.find((k) =>
+      k.test === testName && k.subtest === sub.name &&
+      (k.when === 'always' || (k.when === 'github.io' && mirrorsAreGithubIo())));
+    if (!known) return sub;
+    return {
+      ...sub,
+      status: 'INFEASIBLE',
+      message: `Cannot pass here: ${known.reason}. ` +
+               `Reported ${sub.status}${sub.message ? `: ${sub.message}` : ''}`,
+    };
+  });
 }
 
 async function buildTests(manifest) {
@@ -567,14 +688,14 @@ function runTest(test) {
       if (data.type !== 'done') return;
       const harnessStatus = ['OK', 'ERROR', 'TIMEOUT', 'PRECONDITION_FAILED'][data.status.status] || 'ERROR';
       const subtests = data.tests || [];
-      const mapped = subtests.map((t) => ({
+      const mapped = markInfeasible(test.name, subtests.map((t) => ({
         name: t.name,
         status: statusName(t.status),
         message: t.message || '',
-      }));
+      })));
       let status;
       if (harnessStatus !== 'OK') status = harnessStatus.toLowerCase();
-      else if (mapped.some((t) => t.status !== 'PASS')) status = 'fail';
+      else if (mapped.some((t) => t.status !== 'PASS' && t.status !== 'INFEASIBLE')) status = 'fail';
       else status = 'pass';
       finish({status, tests: mapped, message: data.status.message || ''});
     }
@@ -690,7 +811,9 @@ function render() {
     countsEl.className = 'test-counts';
     if (test.result && test.result.tests && test.result.tests.length) {
       const passed = test.result.tests.filter((t) => t.status === 'PASS').length;
-      countsEl.textContent = `${passed}/${test.result.tests.length} subtests`;
+      const infeasible = test.result.tests.filter((t) => t.status === 'INFEASIBLE').length;
+      countsEl.textContent = `${passed}/${test.result.tests.length - infeasible} subtests` +
+          (infeasible ? `, ${infeasible} infeasible here` : '');
     }
     const actions = document.createElement('span');
     actions.className = 'test-actions';

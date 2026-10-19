@@ -134,6 +134,30 @@ shown inline:
 - **`*.any.serviceworker.html`** variants. A service worker script request
   bypasses service worker interception by design, so the generated worker script
   cannot be served from the virtual tree.
+- **`fetch/fetch-service-worker.*`** registers its own service worker, and for
+  the same reason its script answers 404 from the static mirror.
+- **`top-level-site-keying`** opens remote contexts as top-level windows. The
+  popup blocker stops them without a user gesture, and once allowed they load
+  outside the mirror's service worker, which is partitioned under the runner's
+  top-level site, so the executor page answers 404.
+
+A few single subtests cannot pass here either, in files that otherwise run.
+The runner reports them as `INFEASIBLE`, with the reason and what the subtest
+reported, and a file whose other subtests all pass counts as passed:
+
+- Subtests that read from an origin **same site** with the test. Every
+  `github.io` mirror is its own site, so there is no same-site pair. Applied
+  only when all origins are on `github.io`.
+- Subtests that need **two distinct cross-site origins**.
+  `HTTPS_NOTSAMESITE_ORIGIN` and `HTTPS_OTHER_NOTSAMESITE_ORIGIN` are one mirror
+  here, so the origin meant to be dropped or unlisted is the one the test
+  allowed.
+- The **service worker** subtest of `permissions-policy-workers`, for the
+  service worker script reason above.
+
+The lists are `INFEASIBLE_FILES` and `INFEASIBLE_SUBTESTS` in
+[`assets/runner.js`](assets/runner.js). Only failing subtests are relabeled, so a
+subtest on the list that passes is still reported as a pass.
 
 Everything else runs. The
 [Cross-Origin Storage extension](https://github.com/web-ai-community/cross-origin-storage-extension)

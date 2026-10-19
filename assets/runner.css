@@ -197,7 +197,7 @@ button.primary {
 .subtests .st { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; }
 .subtests .st.PASS { color: var(--pass); }
 .subtests .st.FAIL, .subtests .st.ERROR, .subtests .st.PRECONDITION_FAILED { color: var(--fail); }
-.subtests .st.TIMEOUT, .subtests .st.NOTRUN { color: var(--warn); }
+.subtests .st.TIMEOUT, .subtests .st.NOTRUN, .subtests .st.INFEASIBLE { color: var(--warn); }
 .subtests .msg { color: var(--muted); white-space: pre-wrap; font-family: var(--mono); font-size: 0.78rem; }
 
 .pending { color: var(--muted); }
